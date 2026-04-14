@@ -1,0 +1,24 @@
+{
+  "name": "Beautiful Penda",
+  "short_name": "Penda",
+  "description": "Gestion de salon Beautiful Penda, installable sur mobile et utilisable hors ligne.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f7f3ea",
+  "theme_color": "#7c2dbf",
+  "icons": [
+    {
+      "src": "./beautiful-penda-logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./beautiful-penda-logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
