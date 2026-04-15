@@ -1,6 +1,6 @@
 {
   "name": "Beautiful Penda",
-  "short_name": "Penda",
+  "short_name": "Beautiful Penda",
   "description": "Gestion de salon Beautiful Penda, installable sur mobile et utilisable hors ligne.",
   "start_url": "./index.html",
   "scope": "./",
