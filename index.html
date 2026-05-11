@@ -581,6 +581,7 @@ document.addEventListener('DOMContentLoaded', function(){
       <div class="nav-item" data-page="gammes">&#127873; Gammes</div>
       <div class="nav-section">Finances</div>
       <div class="nav-item" data-page="ventes">&#128722; Ventes</div>
+      <div class="nav-item" data-page="depenses">&#128179; Depenses</div>
       <div class="nav-item" id="NAV-FINANCES" data-page="finances">&#128176; Finances</div>
     </nav>
     <div class="sdate" id="SDATE"></div>
@@ -659,7 +660,7 @@ function rdvHeureOptions(selected){
 function isoDate(d){ return new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,10); }
 function monthKey(d){ return isoDate(d).slice(0,7); }
 function yearKey(d){ return isoDate(d).slice(0,4); }
-function recetteEntries(){ return DB.ventes; }
+function recetteEntries(){ return DB.ventes.filter(function(v){ return v.type!=='depense'; }); }
 function salesForCurrentMonth(){ var key = monthKey(TODAY); return recetteEntries().filter(function(v){ return (v.date || '').slice(0,7) === key; }); }
 function salesForCurrentYear(){ var key = yearKey(TODAY); return recetteEntries().filter(function(v){ return (v.date || '').slice(0,4) === key; }); }
 function ventesForToday(){ var today = isoDate(TODAY); return recetteEntries().filter(function(v){ return v.date === today; }); }
@@ -670,22 +671,28 @@ function traitementSolde(t){ return Math.max(0, (t.prixTotal || 0) - traitementP
 function traitementSoldeTotal(){ return DB.traitements.reduce(function(sum,t){ return sum + traitementSolde(t); },0); }
 function totalARecouvrer(){ return rdvSoldeTotal() + traitementSoldeTotal(); }
 function paiementModesOptions(selected){ return ['Especes','Wave','Orange Money'].map(function(m){ return '<option '+(selected===m?'selected':'')+'>'+m+'</option>'; }).join(''); }
+function nextId(){
+  return Date.now() + Math.floor(Math.random()*100000);
+}
 function upsertTraitementVente(t, kind, seanceNum, montant, date, mode){
   var idx = DB.ventes.findIndex(function(v){ return v.type==='traitement' && v.refId===t.id && (v.traitementKind||'')===kind && ((v.seance||0)===(seanceNum||0)); });
   if(!montant || montant<=0 || !date){
-    if(idx>=0) DB.ventes.splice(idx,1);
+    if(idx>=0){
+      queueDeletedRow('ventes', DB.ventes[idx].id);
+      DB.ventes.splice(idx,1);
+    }
     return;
   }
   var desc = kind==='avance' ? 'Avance traitement' : 'Seance '+seanceNum+' traitement';
   var payload = {date:date,cId:t.cId,type:'traitement',desc:desc,montant:montant,mode:mode||'Especes',refId:t.id,traitementKind:kind,seance:seanceNum||0};
   if(idx>=0) DB.ventes[idx] = Object.assign({id:DB.ventes[idx].id}, payload);
-  else DB.ventes.push(Object.assign({id:Date.now()+Math.floor(Math.random()*1000)}, payload));
+  else DB.ventes.push(Object.assign({id:nextId()}, payload));
 }
 function syncTraitementVentes(t){
   var dateCreation = t.dateCreation || isoDate(TODAY);
   upsertTraitementVente(t,'avance',0,t.avance || 0,dateCreation,t.avanceMode || 'Especes');
   t.seances.forEach(function(se){
-    upsertTraitementVente(t,'seance',se.n,(se.statut==='termine' ? (se.paye || 0) : 0),se.date,se.mode || 'Especes');
+    upsertTraitementVente(t,'seance',se.n,(se.paye || 0),se.date,se.mode || 'Especes');
   });
 }
 function removeTraitementVentes(traitementId){
@@ -695,9 +702,52 @@ function removeTraitementVentes(traitementId){
     return !linked;
   });
 }
+function upsertRdvVente(r, prestationId, montant, date, mode){
+  var idx = DB.ventes.findIndex(function(v){
+    return v.type==='prestation' && v.refId===r.id && (v.traitementKind||'')==='rdv' && Number(v.seance||0)===Number(prestationId||0);
+  });
+  if(!montant || montant<=0 || !date){
+    if(idx>=0){
+      queueDeletedRow('ventes', DB.ventes[idx].id);
+      DB.ventes.splice(idx,1);
+    }
+    return;
+  }
+  var prest = gpr(prestationId) || {nom:'Prestation'};
+  var payload = {
+    date:date,
+    cId:r.cId,
+    type:'prestation',
+    desc:prest.nom,
+    montant:montant,
+    mode:mode || 'Especes',
+    refId:r.id,
+    traitementKind:'rdv',
+    seance:Number(prestationId || 0)
+  };
+  if(idx>=0) DB.ventes[idx] = Object.assign({id:DB.ventes[idx].id}, payload);
+  else DB.ventes.push(Object.assign({id:nextId()}, payload));
+}
+function syncRdvVentes(r, mode){
+  var remaining = Number(r && r.paye || 0);
+  var currentMode = mode || r.mode || 'Especes';
+  (r.prests || []).forEach(function(prestationId){
+    var prest = gpr(prestationId);
+    var allocation = Math.max(0, Math.min(Number(prest && prest.prix || 0), remaining));
+    upsertRdvVente(r, prestationId, (r.statut==='termine' ? allocation : 0), r.date, currentMode);
+    remaining = Math.max(0, remaining - allocation);
+  });
+}
+function removeRdvVentes(rdvId){
+  DB.ventes = DB.ventes.filter(function(v){
+    var linked = v.type==='prestation' && v.refId===rdvId && (v.traitementKind||'')==='rdv';
+    if(linked) queueDeletedRow('ventes', v.id);
+    return !linked;
+  });
+}
 function beneficeEstimeMois(){
   var ventesMois = salesForCurrentMonth();
-  return ventesMois.reduce(function(sum,v){
+  var recettes = ventesMois.reduce(function(sum,v){
     if(v.type==='produit'){
       var p = v.refId ? gprod(v.refId) : null;
       return sum + (v.montant - (p ? p.ca : 0));
@@ -715,6 +765,10 @@ function beneficeEstimeMois(){
     }
     return sum;
   },0);
+  var depensesMois = DB.ventes.filter(function(v){
+    return v.type==='depense' && (v.date || '').slice(0,7) === monthKey(TODAY);
+  }).reduce(function(sum,v){ return sum + (v.montant || 0); },0);
+  return recettes - depensesMois;
 }
 function restoreSaleStock(v){
   if(!v) return;
@@ -743,12 +797,12 @@ var DB = {
     {id:6,nom:'Lissage keratine',cat:'Techniques',prix:35000,duree:180,actif:false}
   ],
   rdv:[
-    {id:1,cId:1,date:'2025-01-14',heure:'09:00',prests:[1,2],statut:'termine',total:8500,paye:8500},
-    {id:2,cId:2,date:'2025-01-14',heure:'11:00',prests:[3],statut:'confirme',total:15000,paye:5000},
-    {id:3,cId:3,date:'2025-01-15',heure:'10:00',prests:[4,5],statut:'en attente',total:28000,paye:0},
-    {id:4,cId:4,date:'2025-01-13',heure:'14:00',prests:[2],statut:'termine',total:5000,paye:5000},
-    {id:5,cId:1,date:'2024-12-10',heure:'10:00',prests:[3],statut:'termine',total:15000,paye:15000},
-    {id:6,cId:1,date:'2024-11-20',heure:'14:00',prests:[5],statut:'termine',total:8000,paye:8000}
+    {id:1,cId:1,date:'2025-01-14',heure:'09:00',prests:[1,2],statut:'termine',total:8500,paye:8500,mode:'Especes'},
+    {id:2,cId:2,date:'2025-01-14',heure:'11:00',prests:[3],statut:'confirme',total:15000,paye:5000,mode:'Wave'},
+    {id:3,cId:3,date:'2025-01-15',heure:'10:00',prests:[4,5],statut:'en attente',total:28000,paye:0,mode:'Especes'},
+    {id:4,cId:4,date:'2025-01-13',heure:'14:00',prests:[2],statut:'termine',total:5000,paye:5000,mode:'Orange Money'},
+    {id:5,cId:1,date:'2024-12-10',heure:'10:00',prests:[3],statut:'termine',total:15000,paye:15000,mode:'Especes'},
+    {id:6,cId:1,date:'2024-11-20',heure:'14:00',prests:[5],statut:'termine',total:8000,paye:8000,mode:'Wave'}
   ],
   traitements:[
     {id:1,cId:1,dateCreation:'2024-12-01',prixTotal:60000,avance:0,avanceMode:'Especes',statut:'en cours',seances:[{n:1,date:'2024-12-01',statut:'termine',paye:15000,mode:'Especes'},{n:2,date:'2024-12-15',statut:'termine',paye:15000,mode:'Wave'},{n:3,date:'2025-01-05',statut:'termine',paye:10000,mode:'Orange Money'},{n:4,date:'2025-01-20',statut:'planifie',paye:0,mode:'Especes'}]},
@@ -767,9 +821,8 @@ var DB = {
     {id:2,nom:'Pack Brillance & Finition',desc:'Shampoing + Spray brillance',prix:13000,items:[{pId:1,qte:1},{pId:4,qte:1}]}
   ],
   ventes:[
-    {id:1,date:'2025-01-14',cId:1,type:'prestation',desc:'Coupe + Brushing',montant:8500,mode:'Especes',refId:null},
     {id:2,date:'2025-01-14',cId:2,type:'produit',desc:'Shampoing Keratine',montant:8500,mode:'Wave',refId:1},
-    {id:3,date:'2025-01-13',cId:4,type:'prestation',desc:'Brushing',montant:5000,mode:'Orange Money',refId:null}
+    {id:5,date:'2025-01-11',cId:null,type:'depense',desc:'Achat serviettes',montant:12000,mode:'Especes',refId:null}
   ]
 };
 
@@ -843,7 +896,8 @@ function buildRdv(rows, linkRows){
       prests: grouped[Number(row.id)] || [],
       statut: row.statut || 'en attente',
       total: Number(row.total || 0),
-      paye: Number(row.paye || 0)
+      paye: Number(row.paye || 0),
+      mode: row.mode || 'Especes'
     };
   });
 }
@@ -1091,8 +1145,8 @@ function scheduleSupabaseSave(){
   }, 500);
 }
 
-var PAGES_ORDER=['dash','clients','rdv','traitements','prestations','produits','gammes','ventes','finances'];
-var TITLES={dash:'Tableau de bord',clients:'Clientes',rdv:'Rendez-vous',traitements:'Traitements capillaires',prestations:'Prestations',produits:'Produits et stock',gammes:'Gammes capillaires',ventes:'Ventes',finances:'Finances'};
+var PAGES_ORDER=['dash','clients','rdv','traitements','prestations','produits','gammes','ventes','depenses','finances'];
+var TITLES={dash:'Tableau de bord',clients:'Clientes',rdv:'Rendez-vous',traitements:'Traitements capillaires',prestations:'Prestations',produits:'Produits et stock',gammes:'Gammes capillaires',ventes:'Ventes',depenses:'Depenses du salon',finances:'Finances'};
 function canAccessPage(p){ return !(p==='finances' && ROLE!=='admin'); }
 function updateRoleUI(){
   if($('NAV-FINANCES')) $('NAV-FINANCES').style.display = ROLE==='admin' ? 'flex' : 'none';
@@ -1167,30 +1221,48 @@ produits:function(el,acts){ acts.innerHTML='<button class="btn btn-primary" oncl
 gammes:function(el,acts){ acts.innerHTML='<button class="btn btn-primary" onclick="mGamme()">+ Nouvelle gamme</button>'; if(!DB.gammes.length){ el.innerHTML='<div class="card"><div class="empty">Aucune gamme.</div></div>'; return; } el.innerHTML=DB.gammes.map(function(g){ var stockOk=g.items.every(function(it){var p=gprod(it.pId);return p&&p.stock>=it.qte;}); var coutTotal=g.items.reduce(function(s,it){var p=gprod(it.pId);return s+(p?p.ca*it.qte:0);},0); var itemRows=g.items.map(function(it){ var p=gprod(it.pId), ok=p&&p.stock>=it.qte; return '<tr><td>'+(p?esc(p.nom):'?')+'</td><td>'+it.qte+'</td><td>'+(p?p.stock:'-')+'</td><td><span class="badge '+(ok?'bs':'bd')+'">'+(ok?'OK':'Insuffisant')+'</span></td></tr>'; }).join(''); return '<div class="card"><div class="ct"><div><div style="font-size:14px;font-weight:600">&#127873; '+esc(g.nom)+'</div>'+(g.desc?'<div style="font-size:12px;color:#888;font-weight:400;margin-top:2px">'+esc(g.desc)+'</div>':'')+'</div><div class="fg"><span class="badge '+(stockOk?'bs':'bd')+'">'+(stockOk?'Disponible':'Stock insuffisant')+'</span><button class="btn btn-sm btn-edit" onclick="mGamme('+g.id+')">Modifier</button><button class="btn btn-sm btn-del" onclick="delGamme('+g.id+')">Suppr.</button></div></div><div style="display:flex;gap:18px;font-size:13px;margin-bottom:12px"><span>Prix pack: <strong style="color:#185FA5">'+fmt(g.prix)+'</strong></span><span>Cout: <strong style="color:#888">'+fmt(coutTotal)+'</strong></span><span>Marge: <strong style="color:#16a34a">'+fmt(g.prix-coutTotal)+'</strong></span></div><table><tr><th>Produit</th><th>Qte</th><th>Stock</th><th>Etat</th></tr>'+itemRows+'</table><div style="margin-top:12px">'+(stockOk?'<button class="btn btn-primary" onclick="vendreGamme('+g.id+')">&#128722; Vendre ce pack</button>':'<div class="ae" style="margin:0">Stock insuffisant - vente impossible</div>')+'</div></div>'; }).join(''); },
 ventes:function(el,acts){
   acts.innerHTML='<button class="btn btn-primary" onclick="mVente()">+ Vente rapide</button>';
-  var tot=DB.ventes.reduce(function(s,v){return s+v.montant;},0);
-  var totPrest=DB.ventes.filter(function(v){return v.type==='prestation';}).reduce(function(s,v){return s+v.montant;},0);
-  var totProd=DB.ventes.filter(function(v){return v.type==='produit'||v.type==='gamme';}).reduce(function(s,v){return s+v.montant;},0);
-  var totTrait=DB.ventes.filter(function(v){return v.type==='traitement';}).reduce(function(s,v){return s+v.montant;},0);
+  var ventesRecettes=DB.ventes.filter(function(v){ return v.type!=='depense'; });
+  var tot=ventesRecettes.reduce(function(s,v){return s+v.montant;},0);
+  var totPrest=ventesRecettes.filter(function(v){return v.type==='prestation';}).reduce(function(s,v){return s+v.montant;},0);
+  var totProd=ventesRecettes.filter(function(v){return v.type==='produit'||v.type==='gamme';}).reduce(function(s,v){return s+v.montant;},0);
+  var totTrait=ventesRecettes.filter(function(v){return v.type==='traitement';}).reduce(function(s,v){return s+v.montant;},0);
   var TC={prestation:'bi',produit:'bs',traitement:'bw',gamme:'bp'};
-  var rows=DB.ventes.slice().sort(function(a,b){
+  var rows=ventesRecettes.slice().sort(function(a,b){
     return (b.date||'').localeCompare(a.date||'') || b.id-a.id;
   }).map(function(v){
     var c=gc(v.cId);
+    var autoRdv=v.type==='prestation' && (v.traitementKind||'')==='rdv';
     var actions=v.type==='traitement'
       ? '<span style="font-size:11px;color:#999">Generee depuis l onglet Traitements</span>'
+      : autoRdv
+      ? '<span style="font-size:11px;color:#999">Generee depuis le rendez-vous</span>'
       : '<div class="fg"><button class="btn btn-sm btn-edit" onclick="mVenteEdit('+v.id+')">Modifier</button><button class="btn btn-sm btn-del" onclick="delVente('+v.id+')">Suppr.</button></div>';
     return '<tr><td>'+fmtDate(v.date)+'</td><td>'+(c?esc(c.nom):'?')+'</td><td><span class="badge '+(TC[v.type]||'bg')+'">'+esc(v.type)+'</span></td><td>'+esc(v.desc)+'</td><td style="font-weight:600">'+fmt(v.montant)+'</td><td><span class="badge bg">'+esc(v.mode || '-')+'</span></td><td>'+actions+'</td></tr>';
   }).join('');
   el.innerHTML='<div class="g4"><div class="metric"><div class="ml">Total encaisse</div><div class="mv">'+fmt(tot)+'</div></div><div class="metric"><div class="ml">Prestations</div><div class="mv">'+fmt(totPrest)+'</div></div><div class="metric"><div class="ml">Produits & Gammes</div><div class="mv">'+fmt(totProd)+'</div></div><div class="metric"><div class="ml">Traitements</div><div class="mv">'+fmt(totTrait)+'</div></div></div><div class="card"><table><tr><th>Date</th><th>Cliente</th><th>Type</th><th>Description</th><th>Montant</th><th>Mode</th><th>Actions</th></tr>'+rows+'</table></div>';
 },
+depenses:function(el,acts){
+  acts.innerHTML='<button class="btn btn-primary" onclick="mDepense()">+ Nouvelle depense</button>';
+  var depenses=DB.ventes.filter(function(v){ return v.type==='depense'; });
+  var total=depenses.reduce(function(sum,v){ return sum + (v.montant || 0); },0);
+  var totalMois=depenses.filter(function(v){ return (v.date || '').slice(0,7) === monthKey(TODAY); }).reduce(function(sum,v){ return sum + (v.montant || 0); },0);
+  var rows=depenses.slice().sort(function(a,b){
+    return (b.date||'').localeCompare(a.date||'') || b.id-a.id;
+  }).map(function(v){
+    return '<tr><td>'+fmtDate(v.date)+'</td><td>'+esc(v.desc)+'</td><td><span class="badge bd">depense</span></td><td style="font-weight:600;color:#b91c1c">'+fmt(v.montant)+'</td><td><span class="badge bg">'+esc(v.mode || '-')+'</span></td><td><div class="fg"><button class="btn btn-sm btn-edit" onclick="mDepense('+v.id+')">Modifier</button><button class="btn btn-sm btn-del" onclick="delDepense('+v.id+')">Suppr.</button></div></td></tr>';
+  }).join('');
+  el.innerHTML='<div class="g3"><div class="metric"><div class="ml">Depenses totales</div><div class="mv" style="color:#b91c1c">'+fmt(total)+'</div></div><div class="metric"><div class="ml">Depenses du mois</div><div class="mv" style="color:#b91c1c">'+fmt(totalMois)+'</div></div><div class="metric"><div class="ml">Nombre de lignes</div><div class="mv">'+depenses.length+'</div></div></div><div class="card"><table><tr><th>Date</th><th>Description</th><th>Type</th><th>Montant</th><th>Mode</th><th>Actions</th></tr>'+(rows || '<tr><td colspan=\"6\" class=\"empty\">Aucune depense enregistree.</td></tr>')+'</table></div>';
+},
 finances:function(el){
   var ventesMois = salesForCurrentMonth();
   var ventesAnnee = salesForCurrentYear();
+  var depensesMois = DB.ventes.filter(function(v){ return v.type==='depense' && (v.date || '').slice(0,7) === monthKey(TODAY); });
   var rm = ventesMois.reduce(function(s,v){ return s+v.montant; },0);
   var ra = ventesAnnee.reduce(function(s,v){ return s+v.montant; },0);
   var rp = ventesMois.filter(function(v){ return v.type==='prestation'; }).reduce(function(s,v){ return s+v.montant; },0);
   var rpd = ventesMois.filter(function(v){ return v.type==='produit'||v.type==='gamme'; }).reduce(function(s,v){ return s+v.montant; },0);
   var rt = ventesMois.filter(function(v){ return v.type==='traitement'; }).reduce(function(s,v){ return s+v.montant; },0);
+  var dm = depensesMois.reduce(function(s,v){ return s+v.montant; },0);
   var sol = totalARecouvrer();
   var pm = ventesMois.length ? Math.round(rm/ventesMois.length) : 0;
   var benef = beneficeEstimeMois();
@@ -1203,7 +1275,7 @@ finances:function(el){
     var n = ventesMois.filter(function(v){ return v.mode===m; }).length;
     return '<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #e8e6df"><span>'+m+'</span><div style="text-align:right"><div style="font-weight:600">'+fmt(t)+'</div><div style="font-size:11px;color:#999">'+n+' transaction(s)</div></div></div>';
   }).join('');
-  el.innerHTML='<div class="g4"><div class="metric"><div class="ml">Recettes du mois</div><div class="mv">'+fmt(rm)+'</div></div><div class="metric"><div class="ml">Recettes de l\'année</div><div class="mv">'+fmt(ra)+'</div></div><div class="metric"><div class="ml">Bénéfice estimé</div><div class="mv" style="color:#16a34a">'+fmt(benef)+'</div></div><div class="metric"><div class="ml">Soldes à recouvrer</div><div class="mv" style="color:#b91c1c">'+fmt(sol)+'</div></div></div><div class="g2"><div class="card"><div class="ct">Recettes par type</div>'+bars+'</div><div class="card"><div class="ct">Modes de paiement</div>'+modes+'</div></div><div class="card"><div class="ct">Panier moyen du mois</div><div class="mv">'+fmt(pm)+'</div></div>';
+  el.innerHTML='<div class="g4"><div class="metric"><div class="ml">Recettes du mois</div><div class="mv">'+fmt(rm)+'</div></div><div class="metric"><div class="ml">Recettes de l\'année</div><div class="mv">'+fmt(ra)+'</div></div><div class="metric"><div class="ml">Bénéfice estimé</div><div class="mv" style="color:#16a34a">'+fmt(benef)+'</div></div><div class="metric"><div class="ml">Soldes à recouvrer</div><div class="mv" style="color:#b91c1c">'+fmt(sol)+'</div></div></div><div class="g3"><div class="metric"><div class="ml">Dépenses du mois</div><div class="mv" style="color:#b91c1c">'+fmt(dm)+'</div></div><div class="metric"><div class="ml">Panier moyen du mois</div><div class="mv">'+fmt(pm)+'</div></div><div class="metric"><div class="ml">Résultat net du mois</div><div class="mv" style="color:'+(benef>=0?'#16a34a':'#b91c1c')+'">'+fmt(benef)+'</div></div></div><div class="g2"><div class="card"><div class="ct">Recettes par type</div>'+bars+'</div><div class="card"><div class="ct">Modes de paiement</div>'+modes+'</div></div>';
 }
 };
 function switchRdvTab(el,tab){ document.querySelectorAll('.tab-bar .tab').forEach(function(t){ t.classList.remove('active'); }); el.classList.add('active'); renderRdvTab(tab); }
@@ -1220,8 +1292,8 @@ function filterC(q){ var tb=$('CTBL'); if(!tb) return; var qq=(q||'').toLowerCas
 function ficheClient(id){ var c=gc(id); if(!c) return; var h=clientHistorique(id); var traitClient=DB.traitements.filter(function(t){return t.cId===id;}); var traitEnCours=traitClient.find(function(t){return t.statut==='en cours';}); var traitHtml=traitClient.length?traitClient.map(function(t){ var done=t.seances.filter(function(s){return s.statut==='termine';}).length; var paye=traitementPayeTotal(t); return '<div class="hist-row"><div><div style="font-weight:500">Traitement capillaire</div><div style="font-size:11px;color:#aaa">'+done+'/4 seances - <span class="badge '+(t.statut==='en cours'?'bi':'bs')+'">'+esc(t.statut)+'</span></div></div><div style="text-align:right"><div style="font-weight:600;color:#16a34a">'+fmt(paye)+'</div><div style="font-size:11px;color:#aaa">sur '+fmt(t.prixTotal)+'</div></div></div>'; }).join(''):'<div class="empty" style="padding:10px">Aucun traitement</div>'; OM('<div class="overlay" onclick="if(event.target===this)CM()"><div class="modal modal-lg"><div class="mh"><h3>Fiche cliente</h3><button class="xb" onclick="CM()">x</button></div><div class="mb"><div class="fr" style="margin-bottom:16px">'+avHtml(c,true)+'<div><div style="font-size:16px;font-weight:700">'+esc(c.nom)+'</div><div style="color:#888">'+esc(c.tel)+'</div>'+(c.notes?'<div style="font-size:12px;color:#aaa;margin-top:3px">'+esc(c.notes)+'</div>':'')+'</div></div><div class="g3" style="gap:8px;margin-bottom:14px"><div class="metric"><div class="ml">RDV effectues</div><div class="mv" style="font-size:16px">'+h.nbRdv+'</div></div><div class="metric"><div class="ml">Total depense</div><div class="mv" style="font-size:16px;color:#16a34a">'+fmt(h.totalDepense)+'</div></div><div class="metric"><div class="ml">Traitements</div><div class="mv" style="font-size:16px">'+traitClient.length+'</div></div></div>'+(traitEnCours?'<div class="ai" style="margin-bottom:12px">Traitement en cours - '+traitEnCours.seances.filter(function(s){return s.statut==='termine';}).length+'/4 seances effectuees</div>':'')+'<div class="divider"></div><div class="ct-sm">Historique des prestations</div>'+h.rdvRows+'<div class="divider"></div><div class="ct-sm">Traitements capillaires</div>'+traitHtml+'</div><div class="mf"><button class="btn" onclick="CM()">Fermer</button><button class="btn btn-edit" onclick="CM();mClient('+id+')">Modifier la fiche</button></div></div></div>'); }
 function mClient(id){ var c=id?gc(id):null; OM('<div class="overlay" onclick="if(event.target===this)CM()"><div class="modal"><div class="mh"><h3>'+(c?'Modifier la cliente':'Nouvelle cliente')+'</h3><button class="xb" onclick="CM()">x</button></div><div class="mb"><div class="form-group"><label>Nom *</label><input id="FN" value="'+esc(c?c.nom:'')+'" placeholder="Nom complet"></div><div class="form-group"><label>Telephone *</label><input id="FT" value="'+esc(c?c.tel:'')+'" placeholder="77 000 00 00"></div><div class="form-group"><label>Notes</label><textarea id="FNO">'+esc(c?c.notes:'')+'</textarea></div></div><div class="mf"><button class="btn" onclick="CM()">Annuler</button><button class="btn btn-primary" id="SB">'+(c?'Enregistrer':'Creer')+'</button></div></div></div>'); $('SB').onclick=function(){ var nom=$('FN').value.trim(), tel=$('FT').value.trim(); if(!nom||!tel){ alert('Nom et telephone obligatoires.'); return; } var av=nom.split(' ').map(function(w){return w[0];}).join('').slice(0,2).toUpperCase(); if(id){ var cc=gc(id); if(cc){ cc.nom=nom; cc.tel=tel; cc.notes=$('FNO').value; cc.av=av; } } else { DB.clients.push({id:Date.now(),nom:nom,tel:tel,notes:$('FNO').value,av:av,col:COLS[DB.clients.length%4]}); } CM(); go('clients'); }; }
 function delClient(id){ var hasRefs = DB.rdv.some(function(r){return r.cId===id;}) || DB.traitements.some(function(t){return t.cId===id;}) || DB.ventes.some(function(v){return v.cId===id;}); if(hasRefs){ alert('Impossible de supprimer cette cliente car elle a des rendez-vous, traitements ou ventes lies.'); return; } confirmDel('Supprimer cette cliente ?',function(){ queueDeletedRow('clients', id); DB.clients=DB.clients.filter(function(c){return c.id!==id;}); go('clients'); }); }
-function mRdv(id){ var r=id?DB.rdv.find(function(x){return x.id===id;}):null; var cOpts=DB.clients.map(function(c){return '<option value="'+c.id+'" '+(r&&r.cId===c.id?'selected':'')+'>'+esc(c.nom)+'</option>';}).join(''); var pOpts=DB.prestations.filter(function(p){return p.actif;}).map(function(p){ var checked = r && r.prests && r.prests.indexOf(p.id) >= 0 ? 'checked' : ''; return '<label class="ck-item"><input type="checkbox" class="rdv-prest" value="'+p.id+'" '+checked+'><div class="ck-text"><span>'+esc(p.nom)+'</span><span class="ck-meta">'+fmt(p.prix)+' - '+p.duree+' min</span></div></label>'; }).join(''); var stOpts=['en attente','confirme','termine','annule'].map(function(s){return '<option '+(r&&r.statut===s?'selected':'')+'>'+esc(s)+'</option>';}).join(''); var timeOpts=rdvHeureOptions(r?r.heure:'09:00'); OM('<div class="overlay" onclick="if(event.target===this)CM()"><div class="modal"><div class="mh"><h3>'+(r?'Modifier le RDV':'Nouveau RDV')+'</h3><button class="xb" onclick="CM()">x</button></div><div class="mb"><div class="form-group"><label>Cliente</label><select id="FCI">'+cOpts+'</select></div><div class="g2s"><div class="form-group"><label>Date</label><input type="date" id="FDT" value="'+esc(r?r.date:'')+'"></div><div class="form-group"><label>Heure</label><div class="g2s"><select id="FHRH">'+timeOpts.hours+'</select><select id="FHRM">'+timeOpts.minutes+'</select></div></div></div><div class="form-group"><label>Prestations</label><div class="ck-list">'+(pOpts || '<div class="empty" style="padding:8px">Aucune prestation active</div>')+'</div></div><div class="form-group"><label>Statut</label><select id="FST">'+stOpts+'</select></div><div class="g2s"><div class="form-group"><label>Montant paye (FCFA)</label><input type="number" id="FPY" value="'+(r?r.paye:0)+'"></div><div class="form-group"><label>Mode paiement</label><select id="FMD"><option>Especes</option><option>Wave</option><option>Orange Money</option></select></div></div></div><div class="mf"><button class="btn" onclick="CM()">Annuler</button><button class="btn btn-primary" id="SB">'+(r?'Enregistrer':'Creer')+'</button></div></div></div>'); $('SB').onclick=function(){ var cId=parseInt($('FCI').value,10), date=$('FDT').value, heure=fmtHeure24($('FHRH').value+':'+$('FHRM').value); if(!date||!heure||!/^\d{2}:\d{2}$/.test(heure)){ alert('Date et heure obligatoires au format HH:MM.'); return; } var prests=Array.from(document.querySelectorAll('.rdv-prest:checked')).map(function(el){ return parseInt(el.value,10); }); if(!prests.length){ alert('Selectionnez au moins une prestation.'); return; } var total=prests.reduce(function(s,pid){ return s+((gpr(pid)||{prix:0}).prix); },0); var paye=Math.min(parseInt($('FPY').value,10)||0,total||99999); var statut=$('FST').value; if(id){ var rr=DB.rdv.find(function(x){return x.id===id;}); if(rr){ rr.cId=cId; rr.date=date; rr.heure=heure; rr.prests=prests; rr.statut=statut; rr.total=total; rr.paye=paye; } } else { DB.rdv.push({id:Date.now(),cId:cId,date:date,heure:heure,prests:prests,statut:statut,total:total,paye:paye}); } CM(); go('rdv'); }; }
-function delRdv(id){ confirmDel('Supprimer ce rendez-vous ?',function(){ queueDeletedRow('rdv', id); DB.rdv=DB.rdv.filter(function(r){return r.id!==id;}); go('rdv'); }); }
+function mRdv(id){ var r=id?DB.rdv.find(function(x){return x.id===id;}):null; var cOpts=DB.clients.map(function(c){return '<option value="'+c.id+'" '+(r&&r.cId===c.id?'selected':'')+'>'+esc(c.nom)+'</option>';}).join(''); var pOpts=DB.prestations.filter(function(p){return p.actif;}).map(function(p){ var checked = r && r.prests && r.prests.indexOf(p.id) >= 0 ? 'checked' : ''; return '<label class="ck-item"><input type="checkbox" class="rdv-prest" value="'+p.id+'" '+checked+'><div class="ck-text"><span>'+esc(p.nom)+'</span><span class="ck-meta">'+fmt(p.prix)+' - '+p.duree+' min</span></div></label>'; }).join(''); var stOpts=['en attente','confirme','termine','annule'].map(function(s){return '<option '+(r&&r.statut===s?'selected':'')+'>'+esc(s)+'</option>';}).join(''); var timeOpts=rdvHeureOptions(r?r.heure:'09:00'); OM('<div class="overlay" onclick="if(event.target===this)CM()"><div class="modal"><div class="mh"><h3>'+(r?'Modifier le RDV':'Nouveau RDV')+'</h3><button class="xb" onclick="CM()">x</button></div><div class="mb"><div class="form-group"><label>Cliente</label><select id="FCI">'+cOpts+'</select></div><div class="g2s"><div class="form-group"><label>Date</label><input type="date" id="FDT" value="'+esc(r?r.date:'')+'"></div><div class="form-group"><label>Heure</label><div class="g2s"><select id="FHRH">'+timeOpts.hours+'</select><select id="FHRM">'+timeOpts.minutes+'</select></div></div></div><div class="form-group"><label>Prestations</label><div class="ck-list">'+(pOpts || '<div class="empty" style="padding:8px">Aucune prestation active</div>')+'</div></div><div class="form-group"><label>Statut</label><select id="FST">'+stOpts+'</select></div><div class="g2s"><div class="form-group"><label>Montant paye (FCFA)</label><input type="number" id="FPY" value="'+(r?r.paye:0)+'"></div><div class="form-group"><label>Mode paiement</label><select id="FMD">'+paiementModesOptions(r&&r.mode ? r.mode : 'Especes')+'</select></div></div></div><div class="mf"><button class="btn" onclick="CM()">Annuler</button><button class="btn btn-primary" id="SB">'+(r?'Enregistrer':'Creer')+'</button></div></div></div>'); $('SB').onclick=function(){ var cId=parseInt($('FCI').value,10), date=$('FDT').value, heure=fmtHeure24($('FHRH').value+':'+$('FHRM').value), mode=$('FMD').value; if(!date||!heure||!/^\d{2}:\d{2}$/.test(heure)){ alert('Date et heure obligatoires au format HH:MM.'); return; } var prests=Array.from(document.querySelectorAll('.rdv-prest:checked')).map(function(el){ return parseInt(el.value,10); }); if(!prests.length){ alert('Selectionnez au moins une prestation.'); return; } var total=prests.reduce(function(s,pid){ return s+((gpr(pid)||{prix:0}).prix); },0); var paye=Math.min(parseInt($('FPY').value,10)||0,total||99999); var statut=$('FST').value; if(id){ var rr=DB.rdv.find(function(x){return x.id===id;}); if(rr){ rr.cId=cId; rr.date=date; rr.heure=heure; rr.prests=prests; rr.statut=statut; rr.total=total; rr.paye=paye; rr.mode=mode; syncRdvVentes(rr, mode); } } else { var rdv={id:Date.now(),cId:cId,date:date,heure:heure,prests:prests,statut:statut,total:total,paye:paye,mode:mode}; DB.rdv.push(rdv); syncRdvVentes(rdv, mode); } CM(); go('rdv'); }; }
+function delRdv(id){ confirmDel('Supprimer ce rendez-vous ?',function(){ queueDeletedRow('rdv', id); removeRdvVentes(id); DB.rdv=DB.rdv.filter(function(r){return r.id!==id;}); go('rdv'); }); }
 function mPrestation(id){ var p=id?DB.prestations.find(function(x){return x.id===id;}):null; var cats=['Services de base','Coiffures','Techniques','Soins','Traitement special']; var catOpts=cats.map(function(c){return '<option '+(p&&p.cat===c?'selected':'')+'>'+esc(c)+'</option>';}).join(''); OM('<div class="overlay" onclick="if(event.target===this)CM()"><div class="modal"><div class="mh"><h3>'+(p?'Modifier':'Nouvelle prestation')+'</h3><button class="xb" onclick="CM()">x</button></div><div class="mb"><div class="form-group"><label>Nom *</label><input id="FN" value="'+esc(p?p.nom:'')+'"></div><div class="form-group"><label>Categorie</label><select id="FCA">'+catOpts+'</select></div><div class="g2s"><div class="form-group"><label>Prix (FCFA)</label><input type="number" id="FPX" value="'+(p?p.prix:'')+'"></div><div class="form-group"><label>Duree (min)</label><input type="number" id="FDU" value="'+(p?p.duree:'')+'"></div></div><div class="form-group" style="display:flex;align-items:center;gap:10px"><label style="margin:0">Active</label><label class="tog"><input type="checkbox" id="FAC" '+(p&&p.actif!==false?'checked':'')+'><span class="sl"></span></label></div></div><div class="mf"><button class="btn" onclick="CM()">Annuler</button><button class="btn btn-primary" id="SB">'+(p?'Enregistrer':'Creer')+'</button></div></div></div>'); $('SB').onclick=function(){ var nom=$('FN').value.trim(); if(!nom){ alert('Nom obligatoire.'); return; } var data={nom:nom,cat:$('FCA').value,prix:parseInt($('FPX').value,10)||0,duree:parseInt($('FDU').value,10)||0,actif:$('FAC').checked}; if(id){ var pp=DB.prestations.find(function(x){return x.id===id;}); if(pp){ pp.nom=data.nom; pp.cat=data.cat; pp.prix=data.prix; pp.duree=data.duree; pp.actif=data.actif; } } else { DB.prestations.push(Object.assign({id:Date.now()},data)); } CM(); go('prestations'); }; }
 function delPrestation(id){ var used = DB.rdv.some(function(r){ return r.prests.indexOf(id) >= 0; }); if(used){ alert('Impossible de supprimer cette prestation car elle est deja utilisee dans des rendez-vous.'); return; } confirmDel('Supprimer cette prestation ?',function(){ queueDeletedRow('prestations', id); DB.prestations=DB.prestations.filter(function(p){return p.id!==id;}); go('prestations'); }); }
 function desactiverPrest(id){ var p=DB.prestations.find(function(x){return x.id===id;}); if(p){ p.actif=false; } go('prestations'); }
@@ -1240,11 +1312,15 @@ function terminerS(tId,n){ var t=DB.traitements.find(function(x){return x.id===t
 function getItemOpts(type){ if(type==='produit') return DB.produits.map(function(p){return '<option value="'+p.pv+'|'+esc(p.nom)+'|'+p.id+'">'+esc(p.nom)+' (stock : '+p.stock+') - '+fmt(p.pv)+'</option>';}).join(''); if(type==='gamme') return DB.gammes.map(function(g){ var ok=g.items.every(function(it){var p=gprod(it.pId); return p&&p.stock>=it.qte;}); return '<option value="'+g.prix+'|'+esc(g.nom)+'|'+g.id+'" '+(ok?'':'disabled')+'>Gamme : '+esc(g.nom)+' - '+fmt(g.prix)+(ok?'':' (stock insuff.)')+'</option>'; }).join(''); return DB.prestations.filter(function(p){return p.actif;}).map(function(p){return '<option value="'+p.prix+'|'+esc(p.nom)+'|">'+esc(p.nom)+' - '+fmt(p.prix)+'</option>';}).join(''); }
 function updVI(){ $('FIT').innerHTML=getItemOpts($('FTY').value); }
 function mVente(){ var cOpts=DB.clients.map(function(c){return '<option value="'+c.id+'">'+esc(c.nom)+'</option>';}).join(''); OM('<div class="overlay" onclick="if(event.target===this)CM()"><div class="modal"><div class="mh"><h3>Vente rapide</h3><button class="xb" onclick="CM()">x</button></div><div class="mb"><div class="form-group"><label>Cliente</label><select id="FCI">'+cOpts+'</select></div><div class="form-group"><label>Type</label><select id="FTY" onchange="updVI()"><option value="prestation">Prestation</option><option value="produit">Produit unitaire</option><option value="gamme">Gamme (pack)</option></select></div><div class="form-group"><label>Article</label><select id="FIT">'+getItemOpts('prestation')+'</select></div><div class="form-group"><label>Mode paiement</label><select id="FMD"><option>Especes</option><option>Wave</option><option>Orange Money</option></select></div></div><div class="mf"><button class="btn" onclick="CM()">Annuler</button><button class="btn btn-primary" id="SB">Encaisser</button></div></div></div>'); $('SB').onclick=function(){ var cId=parseInt($('FCI').value,10), mode=$('FMD').value, type=$('FTY').value; var iv=$('FIT').value.split('|'); if(!iv[0]){ alert('Choisissez un article.'); return; } var montant=parseInt(iv[0],10)||0, desc=iv[1]||'', ref=iv[2]||''; if(type==='produit'&&ref){ var p=DB.produits.find(function(x){return x.id===parseInt(ref,10);}); if(!p||p.stock<=0){ alert('Stock epuise.'); return; } p.stock=Math.max(0,p.stock-1); } if(type==='gamme'&&ref){ var g=DB.gammes.find(function(x){return x.id===parseInt(ref,10);}); if(g){ for(var i=0;i<g.items.length;i++){ var it=g.items[i], pp=gprod(it.pId); if(!pp||pp.stock<it.qte){ alert('Stock insuffisant: '+(pp?pp.nom:'?')); return; } } g.items.forEach(function(it){ var pp=gprod(it.pId); if(pp) pp.stock=Math.max(0,pp.stock-it.qte); }); } } DB.ventes.push({id:Date.now(),date:isoDate(TODAY),cId:cId,type:type,desc:desc,montant:montant,mode:mode,refId:ref?parseInt(ref,10):null}); CM(); go('ventes'); }; }
-function mVenteEdit(id){ var v=DB.ventes.find(function(x){return x.id===id;}); if(!v) return; if(v.type==='traitement'){ alert('Les transactions de traitement se modifient depuis l onglet Traitements.'); return; } var cOpts=DB.clients.map(function(c){return '<option value="'+c.id+'" '+(v.cId===c.id?'selected':'')+'>'+esc(c.nom)+'</option>';}).join(''); var mOpts=['Especes','Wave','Orange Money'].map(function(m){return '<option '+(v.mode===m?'selected':'')+'>'+esc(m)+'</option>';}).join(''); OM('<div class="overlay" onclick="if(event.target===this)CM()"><div class="modal"><div class="mh"><h3>Modifier la vente</h3><button class="xb" onclick="CM()">x</button></div><div class="mb"><div class="form-group"><label>Cliente</label><select id="FCI">'+cOpts+'</select></div><div class="form-group"><label>Description</label><input id="FDE" value="'+esc(v.desc)+'"></div><div class="form-group"><label>Montant (FCFA)</label><input type="number" id="FMO" value="'+v.montant+'"></div><div class="form-group"><label>Mode de paiement</label><select id="FMD">'+mOpts+'</select></div></div><div class="mf"><button class="btn" onclick="CM()">Annuler</button><button class="btn btn-primary" id="SB">Enregistrer</button></div></div></div>'); $('SB').onclick=function(){ v.cId=parseInt($('FCI').value,10); v.desc=$('FDE').value; v.montant=parseInt($('FMO').value,10)||0; v.mode=$('FMD').value; CM(); go('ventes'); }; }
-function delVente(id){ var v=DB.ventes.find(function(x){return x.id===id;}); if(v && v.type==='traitement'){ alert('Les transactions de traitement se suppriment depuis l onglet Traitements.'); return; } confirmDel('Supprimer cette vente ?',function(){ var vv=DB.ventes.find(function(x){return x.id===id;}); restoreSaleStock(vv); queueDeletedRow('ventes', id); DB.ventes=DB.ventes.filter(function(x){return x.id!==id;}); go('ventes'); }); }
+function mDepense(id){ var d=id?DB.ventes.find(function(x){return x.id===id && x.type==='depense';}):null; OM('<div class="overlay" onclick="if(event.target===this)CM()"><div class="modal"><div class="mh"><h3>'+(d?'Modifier la depense':'Nouvelle depense')+'</h3><button class="xb" onclick="CM()">x</button></div><div class="mb"><div class="form-group"><label>Date</label><input type="date" id="FDD" value="'+esc(d?d.date:isoDate(TODAY))+'"></div><div class="form-group"><label>Description</label><input id="FDE" value="'+esc(d?d.desc:'')+'" placeholder="Ex: Achat produits, electricite"></div><div class="form-group"><label>Montant (FCFA)</label><input type="number" id="FMO" value="'+(d?d.montant:'')+'"></div><div class="form-group"><label>Mode de paiement</label><select id="FMD">'+paiementModesOptions(d?d.mode:'Especes')+'</select></div></div><div class="mf"><button class="btn" onclick="CM()">Annuler</button><button class="btn btn-primary" id="SB">'+(d?'Enregistrer':'Creer')+'</button></div></div></div>'); $('SB').onclick=function(){ var date=$('FDD').value, desc=$('FDE').value.trim(), montant=parseInt($('FMO').value,10)||0, mode=$('FMD').value; if(!date||!desc||!montant){ alert('Date, description et montant sont obligatoires.'); return; } if(id){ d.date=date; d.desc=desc; d.montant=montant; d.mode=mode; } else { DB.ventes.push({id:nextId(),date:date,cId:null,type:'depense',desc:desc,montant:montant,mode:mode,refId:null}); } CM(); go('depenses'); }; }
+function mVenteEdit(id){ var v=DB.ventes.find(function(x){return x.id===id;}); if(!v) return; if(v.type==='traitement'){ alert('Les transactions de traitement se modifient depuis l onglet Traitements.'); return; } if(v.type==='prestation' && (v.traitementKind||'')==='rdv'){ alert('Les ventes generees depuis un rendez-vous se modifient depuis l onglet Rendez-vous.'); return; } var cOpts=DB.clients.map(function(c){return '<option value="'+c.id+'" '+(v.cId===c.id?'selected':'')+'>'+esc(c.nom)+'</option>';}).join(''); var mOpts=['Especes','Wave','Orange Money'].map(function(m){return '<option '+(v.mode===m?'selected':'')+'>'+esc(m)+'</option>';}).join(''); OM('<div class="overlay" onclick="if(event.target===this)CM()"><div class="modal"><div class="mh"><h3>Modifier la vente</h3><button class="xb" onclick="CM()">x</button></div><div class="mb"><div class="form-group"><label>Cliente</label><select id="FCI">'+cOpts+'</select></div><div class="form-group"><label>Description</label><input id="FDE" value="'+esc(v.desc)+'"></div><div class="form-group"><label>Montant (FCFA)</label><input type="number" id="FMO" value="'+v.montant+'"></div><div class="form-group"><label>Mode de paiement</label><select id="FMD">'+mOpts+'</select></div></div><div class="mf"><button class="btn" onclick="CM()">Annuler</button><button class="btn btn-primary" id="SB">Enregistrer</button></div></div></div>'); $('SB').onclick=function(){ v.cId=parseInt($('FCI').value,10); v.desc=$('FDE').value; v.montant=parseInt($('FMO').value,10)||0; v.mode=$('FMD').value; CM(); go('ventes'); }; }
+function delDepense(id){ confirmDel('Supprimer cette depense ?',function(){ queueDeletedRow('ventes', id); DB.ventes=DB.ventes.filter(function(x){return x.id!==id;}); go('depenses'); }); }
+function delVente(id){ var v=DB.ventes.find(function(x){return x.id===id;}); if(v && v.type==='traitement'){ alert('Les transactions de traitement se suppriment depuis l onglet Traitements.'); return; } if(v && v.type==='prestation' && (v.traitementKind||'')==='rdv'){ alert('Les ventes generees depuis un rendez-vous se suppriment depuis l onglet Rendez-vous.'); return; } confirmDel('Supprimer cette vente ?',function(){ var vv=DB.ventes.find(function(x){return x.id===id;}); restoreSaleStock(vv); queueDeletedRow('ventes', id); DB.ventes=DB.ventes.filter(function(x){return x.id!==id;}); go('ventes'); }); }
 DB.traitements.forEach(function(t){ syncTraitementVentes(t); });
+DB.rdv.forEach(function(r){ syncRdvVentes(r, r.mode || 'Especes'); });
 restoreLocalDB();
 DB.traitements.forEach(function(t){ syncTraitementVentes(t); });
+DB.rdv.forEach(function(r){ syncRdvVentes(r, r.mode || 'Especes'); });
 persistLocalDB();
 if($('AUTHCODE')){
   $('AUTHCODE').addEventListener('input', function(){ this.value = this.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,5); });
