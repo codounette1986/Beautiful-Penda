@@ -377,6 +377,10 @@ function syncPendingIfPossible(){
   if(!AUTHENTICATED || !SUPABASE_CLIENT || navigator.onLine === false || !hasPendingSync()) return Promise.resolve(false);
   return saveDBToSupabase();
 }
+function loadFreshDBAfterSync(force){
+  SUPABASE_LOAD_PROMISE = null;
+  return loadDBFromSupabase(!!force);
+}
 function isDbDirty(snapshot){
   var current = snapshot || storageGet(DB_CACHE_KEY) || '';
   return !!current && current !== (storageGet(DB_SYNCED_SNAPSHOT_KEY) || '');
@@ -427,10 +431,10 @@ function authSubmit(){
       if(typeof setRole === 'function') setRole(role);
       if(typeof unlockApp === 'function') unlockApp();
 
-      var openDash = function(){
+      var openDefaultPage = function(){
         setTimeout(function(){
           try {
-            if(typeof go === 'function') go('dash');
+            if(typeof go === 'function') go(role === 'admin' ? 'dash' : 'clients');
           } catch(e) {
             var errBox = document.getElementById('AUTHERR');
             if(errBox){
@@ -443,13 +447,13 @@ function authSubmit(){
       };
 
       if(typeof loadDBFromSupabase === 'function'){
-        SUPABASE_LOAD_PROMISE = loadDBFromSupabase(true)
-          .then(function(){ openDash(); }, function(remoteErr){
+        SUPABASE_LOAD_PROMISE = loadFreshDBAfterSync(true)
+          .then(function(){ openDefaultPage(); }, function(remoteErr){
             console.error(remoteErr);
-            openDash();
+            openDefaultPage();
           });
       } else {
-        openDash();
+        openDefaultPage();
       }
       return false;
     };
@@ -570,7 +574,7 @@ document.addEventListener('DOMContentLoaded', function(){
   <div class="sidebar">
     <div class="logo"><h1>&#9986; Beautiful Penda</h1><p>Salon capillaire</p></div>
     <nav style="flex:1;padding:6px 0" id="NAV">
-      <div class="nav-item active" data-page="dash">&#127968; Tableau de bord</div>
+      <div class="nav-item active" id="NAV-DASH" data-page="dash">&#127968; Tableau de bord</div>
       <div class="nav-section">Gestion</div>
       <div class="nav-item" data-page="clients">&#128100; Clientes</div>
       <div class="nav-item" data-page="rdv">&#128197; Rendez-vous</div>
@@ -1026,11 +1030,22 @@ function exportDBForSupabase(){
 function loadDBFromSupabase(force){
   if(!SUPABASE_CLIENT) return Promise.resolve(false);
   if(hasPendingSync()){
+    if(navigator.onLine !== false){
+      return saveDBToSupabase().then(function(){
+        SUPABASE_LOAD_PROMISE = null;
+        return loadDBFromSupabase(!!force);
+      }, function(){
+        restoreLocalDB();
+        updateSyncUI();
+        return 'local-pending';
+      });
+    }
     restoreLocalDB();
     updateSyncUI();
     return Promise.resolve('local-pending');
   }
   if(SUPABASE_LOAD_PROMISE && !force) return SUPABASE_LOAD_PROMISE;
+  if(force) SUPABASE_LOAD_PROMISE = null;
   SUPABASE_LOAD_PROMISE = Promise.all([
     SUPABASE_CLIENT.from('clients').select('*').order('id'),
     SUPABASE_CLIENT.from('prestations').select('*').order('id'),
@@ -1175,15 +1190,17 @@ function scheduleSupabaseSave(){
 
 var PAGES_ORDER=['dash','clients','rdv','traitements','prestations','produits','gammes','ventes','depenses','finances'];
 var TITLES={dash:'Tableau de bord',clients:'Clientes',rdv:'Rendez-vous',traitements:'Traitements capillaires',prestations:'Prestations',produits:'Produits et stock',gammes:'Gammes capillaires',ventes:'Ventes',depenses:'Depenses du salon',finances:'Finances'};
-function canAccessPage(p){ return !(p==='finances' && ROLE!=='admin'); }
+function defaultPageForRole(){ return ROLE==='admin' ? 'dash' : 'clients'; }
+function canAccessPage(p){ return !((p==='finances' || p==='dash') && ROLE!=='admin'); }
 function updateRoleUI(){
+  if($('NAV-DASH')) $('NAV-DASH').style.display = ROLE==='admin' ? 'flex' : 'none';
   if($('NAV-FINANCES')) $('NAV-FINANCES').style.display = ROLE==='admin' ? 'flex' : 'none';
 }
 function setRole(role){
   ROLE = role==='employe' ? 'employe' : 'admin';
   storageSet('bp_role', ROLE);
   updateRoleUI();
-  if(ROLE!=='admin' && $('PTITLE').textContent===TITLES.finances) go('dash');
+  if(ROLE!=='admin' && ($('PTITLE').textContent===TITLES.finances || $('PTITLE').textContent===TITLES.dash)) go('clients');
 }
 function unlockApp(){
   AUTHENTICATED = true;
@@ -1388,8 +1405,8 @@ window.addEventListener('online', function(){
   updateSyncUI();
   syncPendingIfPossible();
   if(AUTHENTICATED && SUPABASE_CLIENT && !hasPendingSync()){
-    loadDBFromSupabase(true).then(function(){
-      if(typeof go === 'function') go('dash');
+    loadFreshDBAfterSync(true).then(function(){
+      if(typeof go === 'function') go(defaultPageForRole());
     });
   }
 });
@@ -1405,13 +1422,13 @@ updateRoleUI();
 if(AUTHENTICATED){
   unlockApp();
   if(SUPABASE_CLIENT){
-    loadDBFromSupabase(true).then(function(){
-      go('dash');
+    loadFreshDBAfterSync(true).then(function(){
+      go(defaultPageForRole());
     }, function(){
-      go('dash');
+      go(defaultPageForRole());
     });
   } else {
-    go('dash');
+    go(defaultPageForRole());
   }
 } else {
   lockApp();

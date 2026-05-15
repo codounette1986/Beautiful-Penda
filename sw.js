@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beautiful-penda-v1';
+const CACHE_NAME = 'beautiful-penda-v2';
 const APP_SHELL = [
   './',
   './index.html',
