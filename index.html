@@ -115,7 +115,7 @@ input:checked + .sl:before{transform:translateX(15px)}
 .auth-logo{width:110px;height:110px;object-fit:cover;border-radius:24px;box-shadow:0 12px 30px rgba(118,43,160,.18);border:1px solid #eee7f5}
 .auth-title{font-size:22px;font-weight:700;margin-bottom:6px}
 .auth-sub{font-size:13px;color:#777;line-height:1.5;margin-bottom:18px}
-.auth-code{font-size:28px;letter-spacing:.35em;text-align:center;font-weight:700;padding:14px 16px;text-transform:uppercase}
+.auth-code{font-size:28px;letter-spacing:.18em;text-align:center;font-weight:700;padding:14px 16px;text-transform:uppercase;-webkit-user-select:text;user-select:text}
 .auth-help{font-size:12px;color:#888;margin-top:10px;text-align:center}
 .auth-error{display:none;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;padding:10px 12px;border-radius:8px;font-size:13px;margin-top:12px}
 .auth-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
@@ -153,6 +153,7 @@ body{font-size:13px}
 .mf{flex-wrap:wrap}
 .auth-card{padding:18px}
 .auth-logo{width:88px;height:88px}
+.auth-code{font-size:24px;letter-spacing:.12em}
 table{font-size:12px}
 th,td{padding:6px 7px}
 }
@@ -212,19 +213,19 @@ th,td{padding:6px 7px}
 <div class="auth-screen" id="LOGIN">
   <div class="auth-card">
     <div class="auth-brand"><img class="auth-logo" src="./beautiful-penda-logo.png?v=20260516a" alt="Logo Beautiful Penda"></div>
-    <div class="auth-title">AccÃ¨s sÃ©curisÃ©</div>
-    <div class="auth-sub">Saisissez votre code Ã  5 caractÃ¨res pour accÃ©der Ã  l'application en mode administrateur ou employÃ©.</div>
+    <div class="auth-title">Acc&egrave;s s&eacute;curis&eacute;</div>
+    <div class="auth-sub">Saisissez votre code &agrave; 5 caract&egrave;res pour acc&eacute;der &agrave; l'application en mode administrateur ou employ&eacute;.</div>
     <form id="AUTHFORM" onsubmit="authSubmit(); return false;" action="javascript:void(0)">
       <div class="form-group">
-        <label>Code d'accÃ¨s</label>
-        <input id="AUTHCODE" class="auth-code" maxlength="5" placeholder="....." autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" inputmode="text">
+        <label>Code d'acc&egrave;s</label>
+        <input id="AUTHCODE" name="access_code" type="text" class="auth-code" maxlength="5" placeholder="A1B2C" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" inputmode="text" enterkeyhint="done" pattern="[A-Za-z0-9]{0,5}">
       </div>
       <div class="auth-actions">
         <button class="btn btn-install" type="button" id="INSTALLBTN">Installer l'application</button>
         <button class="btn" type="button" onclick="authClearCode()">Effacer</button>
-        <a href="#" class="btn btn-primary" id="AUTHBTN" role="button" onclick="authSubmit(); return false;" ontouchstart="authSubmit(); return false;">Se connecter</a>
+        <button class="btn btn-primary" id="AUTHBTN" type="submit">Se connecter</button>
       </div>
-      <div class="auth-error" id="AUTHERR">Code invalide. RÃ©essayez.</div>
+      <div class="auth-error" id="AUTHERR">Code invalide. R&eacute;essayez.</div>
       <div class="auth-help">Format attendu : 5 lettres ou chiffres.</div>
     </form>
   </div>
@@ -610,6 +611,17 @@ document.addEventListener('DOMContentLoaded', function(){
     input.addEventListener('input', function(){
       this.value = this.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,5);
     });
+    input.addEventListener('click', function(){
+      try { this.focus(); } catch(e){}
+    });
+    input.addEventListener('touchend', function(){
+      try { this.focus(); } catch(e){}
+    });
+    setTimeout(function(){
+      try {
+        if(document.body.classList.contains('locked')) input.focus();
+      } catch(e){}
+    }, 300);
   }
   if(storageGet('bp_auth') === '1'){
     if(typeof AUTHENTICATED !== 'undefined') AUTHENTICATED = true;
