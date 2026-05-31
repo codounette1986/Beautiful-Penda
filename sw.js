@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beautiful-penda-v6';
+const CACHE_NAME = 'beautiful-penda-v7';
 const APP_SHELL = [
   './',
   './index.html',
@@ -31,12 +31,12 @@ self.addEventListener('activate', function(event){
 });
 
 self.addEventListener('fetch', function(event){
-  const request = event.request;
+  var request = event.request;
   if(request.method !== 'GET') return;
 
-  const url = new URL(request.url);
-  const isSameOrigin = url.origin === self.location.origin;
-  const isSupabaseApi = url.origin.indexOf('supabase.co') >= 0;
+  var requestUrl = request.url || '';
+  var isSameOrigin = requestUrl.indexOf(self.location.origin) === 0;
+  var isSupabaseApi = requestUrl.indexOf('supabase.co') >= 0;
 
   if(isSupabaseApi){
     return;
@@ -45,7 +45,7 @@ self.addEventListener('fetch', function(event){
   if(request.mode === 'navigate'){
     event.respondWith(
       fetch(request).then(function(response){
-        const copy = response.clone();
+        var copy = response.clone();
         caches.open(CACHE_NAME).then(function(cache){
           cache.put('./index.html', copy);
         });
@@ -62,7 +62,7 @@ self.addEventListener('fetch', function(event){
       caches.match(request).then(function(cached){
         if(cached) return cached;
         return fetch(request).then(function(response){
-          const copy = response.clone();
+          var copy = response.clone();
           caches.open(CACHE_NAME).then(function(cache){
             cache.put(request, copy);
           });

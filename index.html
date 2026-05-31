@@ -8,8 +8,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Beautiful Penda">
-<link rel="manifest" href="./manifest.webmanifest?v=20260531c">
-<link rel="apple-touch-icon" href="./beautiful-penda-logo.png?v=20260531c">
+<link rel="manifest" href="./manifest.webmanifest?v=20260531d">
+<link rel="apple-touch-icon" href="./beautiful-penda-logo.png?v=20260531d">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#f5f4f0;color:#1a1a18;font-size:14px}
@@ -160,7 +160,7 @@ th,td{padding:6px 7px}
 </style>
 <script>
 (function(){
-  var APP_BUILD = 'beautiful-penda-20260531c';
+  var APP_BUILD = 'beautiful-penda-20260531d';
   var BUILD_KEY = 'bp_app_build';
   function resolved(value){
     return Promise.resolve(value);
@@ -211,7 +211,7 @@ th,td{padding:6px 7px}
 <body>
 <div class="auth-screen" id="LOGIN">
   <div class="auth-card">
-    <div class="auth-brand"><img class="auth-logo" src="./beautiful-penda-logo.png?v=20260531c" alt="Logo Beautiful Penda"></div>
+    <div class="auth-brand"><img class="auth-logo" src="./beautiful-penda-logo.png?v=20260531d" alt="Logo Beautiful Penda"></div>
     <div class="auth-title">Acc&egrave;s s&eacute;curis&eacute;</div>
     <div class="auth-sub">Saisissez votre code &agrave; 5 caract&egrave;res pour acc&eacute;der &agrave; l'application en mode administrateur ou employ&eacute;.</div>
     <form id="AUTHFORM" onsubmit="authSubmit(); return false;" action="javascript:void(0)">
@@ -297,35 +297,6 @@ var AUTH_CODES_BOOT = {admin:'AD123', employe:'EMP01'};
 var AUTH_CODES_CACHE_KEY = 'bp_auth_codes_cache';
 var SUPABASE_URL = 'https://ebsivpzmjeutiynsuvpg.supabase.co';
 var SUPABASE_KEY = 'sb_publishable_0hTdrvUMb3ByPQfetA7vBg_YHVSJrWY';
-var SUPABASE_CLIENT = null;
-function attachSupabaseClient(){
-  if(SUPABASE_CLIENT) return SUPABASE_CLIENT;
-  if(window.supabase && window.supabase.createClient){
-    SUPABASE_CLIENT = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-  }
-  return SUPABASE_CLIENT;
-}
-function loadSupabaseSdk(){
-  if(attachSupabaseClient()) return Promise.resolve(SUPABASE_CLIENT);
-  if(window.__BP_SUPABASE_LOADING__) return window.__BP_SUPABASE_LOADING__;
-  window.__BP_SUPABASE_LOADING__ = new Promise(function(resolve){
-    var done = false;
-    var script = document.createElement('script');
-    function finish(value){
-      if(done) return;
-      done = true;
-      resolve(value || attachSupabaseClient() || null);
-    }
-    script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
-    script.async = true;
-    script.defer = true;
-    script.onload = function(){ finish(); };
-    script.onerror = function(){ finish(null); };
-    setTimeout(function(){ finish(null); }, 5000);
-    (document.head || document.documentElement).appendChild(script);
-  });
-  return window.__BP_SUPABASE_LOADING__;
-}
 var DB_CACHE_KEY = 'bp_db_cache_v1';
 var DB_PENDING_SYNC_KEY = 'bp_pending_sync_v1';
 var DB_LAST_SYNC_KEY = 'bp_last_sync_v1';
@@ -570,7 +541,7 @@ function registerServiceWorker(){
   if(!('serviceWorker' in navigator)) return;
   if(location.protocol !== 'https:' && location.hostname !== 'localhost') return;
   (window.__BP_BOOT_CLEANUP__ || Promise.resolve()).then(function(){
-    return navigator.serviceWorker.register('./sw.js?v=20260531c');
+    return navigator.serviceWorker.register('./sw.js?v=20260531d');
   }).catch(function(err){
     console.error('Service worker registration failed', err);
   });
