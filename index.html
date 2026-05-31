@@ -295,6 +295,7 @@ if(window.HTMLCollection && !HTMLCollection.prototype.forEach){
   };
 }
 var AUTH_CODES_BOOT = {admin:'AD123', employe:'EMP01'};
+var AUTH_CODES_CACHE_KEY = 'bp_auth_codes_cache';
 var SUPABASE_URL = 'https://ebsivpzmjeutiynsuvpg.supabase.co';
 var SUPABASE_KEY = 'sb_publishable_0hTdrvUMb3ByPQfetA7vBg_YHVSJrWY';
 var SUPABASE_CLIENT = window.supabase && window.supabase.createClient
@@ -325,6 +326,21 @@ function storageRemove(key){
 function safeJsonParse(value){
   try { return value ? JSON.parse(value) : null; }
   catch(e){ return null; }
+}
+function getCachedAuthCodes(){
+  return safeJsonParse(storageGet(AUTH_CODES_CACHE_KEY)) || {};
+}
+function cacheAuthCode(code, role){
+  if(!code || !role) return;
+  var map = getCachedAuthCodes();
+  map[String(code).toUpperCase()] = role;
+  storageSet(AUTH_CODES_CACHE_KEY, JSON.stringify(map));
+}
+function getAuthRoleFromCode(code){
+  var normalized = String(code || '').toUpperCase();
+  if(normalized === AUTH_CODES_BOOT.admin) return 'admin';
+  if(normalized === AUTH_CODES_BOOT.employe) return 'employe';
+  return getCachedAuthCodes()[normalized] || null;
 }
 function getDeletedRows(){
   return safeJsonParse(storageGet(DB_DELETED_ROWS_KEY)) || {};
@@ -488,6 +504,7 @@ function authSubmit(){
   try {
     var input = document.getElementById('AUTHCODE');
     var err = document.getElementById('AUTHERR');
+    var btn = document.getElementById('AUTHBTN');
     var raw = (input && input.value) || '';
     var code = String(raw).toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,5);
     if(input) input.value = code;
@@ -535,7 +552,50 @@ function authSubmit(){
       return false;
     };
 
+    var showInvalid = function(message){
+      if(err){
+        err.innerHTML = message || 'Code invalide. R&eacute;essayez.';
+        err.style.display = 'block';
+      }
+      if(btn) btn.disabled = false;
+      try { alert('Code invalide.'); } catch(alertErr){}
+      return false;
+    };
+
+    var localRole = getAuthRoleFromCode(code);
+    if(localRole){
+      if(btn) btn.disabled = false;
+      return finishLogin(localRole);
+    }
+
     if(SUPABASE_CLIENT){
+      if(btn) btn.disabled = true;
+      var settled = false;
+      var finishRemote = function(role){
+        if(settled) return;
+        settled = true;
+        if(btn) btn.disabled = false;
+        cacheAuthCode(code, role);
+        finishLogin(role);
+      };
+      var failRemote = function(message){
+        if(settled) return;
+        settled = true;
+        if(btn) btn.disabled = false;
+        if(err){
+          err.innerHTML = message || 'Connexion impossible. R&eacute;essayez.';
+          err.style.display = 'block';
+        }
+      };
+      setTimeout(function(){
+        if(settled) return;
+        var fallbackRole = getAuthRoleFromCode(code);
+        if(fallbackRole){
+          finishRemote(fallbackRole);
+          return;
+        }
+        failRemote('Connexion trop lente. R&eacute;essayez.');
+      }, 4000);
       SUPABASE_CLIENT
         .from('access_codes')
         .select('role')
@@ -543,52 +603,36 @@ function authSubmit(){
         .eq('is_active', true)
         .limit(1)
         .then(function(res){
+          if(settled) return;
           var role = res && res.data && res.data[0] ? res.data[0].role : null;
+          if(!role) role = getAuthRoleFromCode(code);
           if(!role){
-            if(code === AUTH_CODES_BOOT.admin) role = 'admin';
-            if(code === AUTH_CODES_BOOT.employe) role = 'employe';
-          }
-          if(!role){
-            if(err){
-              err.innerHTML = 'Code invalide. R&eacute;essayez.';
-              err.style.display = 'block';
-            }
-            try { alert('Code invalide.'); } catch(alertErr){}
+            showInvalid();
             return;
           }
-          finishLogin(role);
+          finishRemote(role);
         }, function(remoteLoginErr){
+          if(settled) return;
           console.error(remoteLoginErr);
-          var role = null;
-          if(code === AUTH_CODES_BOOT.admin) role = 'admin';
-          if(code === AUTH_CODES_BOOT.employe) role = 'employe';
+          var role = getAuthRoleFromCode(code);
           if(!role){
-            if(err){
-              err.innerHTML = 'Code invalide. R&eacute;essayez.';
-              err.style.display = 'block';
-            }
-            try { alert('Code invalide.'); } catch(alertErr2){}
+            failRemote('Connexion impossible. R&eacute;essayez.');
             return;
           }
-          finishLogin(role);
+          finishRemote(role);
         });
       return false;
     }
 
-    var role = null;
-    if(code === AUTH_CODES_BOOT.admin) role = 'admin';
-    if(code === AUTH_CODES_BOOT.employe) role = 'employe';
+    var role = getAuthRoleFromCode(code);
     if(!role){
-      if(err){
-        err.innerHTML = 'Code invalide. R&eacute;essayez.';
-        err.style.display = 'block';
-      }
-      try { alert('Code invalide.'); } catch(alertErr3){}
-      return false;
+      return showInvalid();
     }
     return finishLogin(role);
   } catch(e) {
     var err2 = document.getElementById('AUTHERR');
+    var btn2 = document.getElementById('AUTHBTN');
+    if(btn2) btn2.disabled = false;
     if(err2){
       err2.textContent = 'Erreur de connexion: ' + e.message;
       err2.style.display = 'block';
