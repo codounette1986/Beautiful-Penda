@@ -8,8 +8,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Beautiful Penda">
-<link rel="manifest" href="./manifest.webmanifest?v=20260531e">
-<link rel="apple-touch-icon" href="./beautiful-penda-logo.png?v=20260531e">
+<link rel="manifest" href="./manifest.webmanifest?v=20260531f">
+<link rel="apple-touch-icon" href="./beautiful-penda-logo.png?v=20260531f">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#f5f4f0;color:#1a1a18;font-size:14px}
@@ -160,7 +160,7 @@ th,td{padding:6px 7px}
 </style>
 <script>
 (function(){
-  var APP_BUILD = 'beautiful-penda-20260531e';
+  var APP_BUILD = 'beautiful-penda-20260531f';
   var BUILD_KEY = 'bp_app_build';
   function resolved(value){
     return Promise.resolve(value);
@@ -211,7 +211,7 @@ th,td{padding:6px 7px}
 <body>
 <div class="auth-screen" id="LOGIN">
   <div class="auth-card">
-    <div class="auth-brand"><img class="auth-logo" src="./beautiful-penda-logo.png?v=20260531e" alt="Logo Beautiful Penda"></div>
+    <div class="auth-brand"><img class="auth-logo" src="./beautiful-penda-logo.png?v=20260531f" alt="Logo Beautiful Penda"></div>
     <div class="auth-title">Acc&egrave;s s&eacute;curis&eacute;</div>
     <div class="auth-sub">Saisissez votre code &agrave; 5 caract&egrave;res pour acc&eacute;der &agrave; l'application en mode administrateur ou employ&eacute;.</div>
     <form id="AUTHFORM" onsubmit="authSubmit(); return false;" action="javascript:void(0)">
@@ -303,6 +303,10 @@ var DB_LAST_SYNC_KEY = 'bp_last_sync_v1';
 var DB_LAST_LOCAL_SAVE_KEY = 'bp_last_local_save_v1';
 var DB_SYNCED_SNAPSHOT_KEY = 'bp_synced_snapshot_v1';
 var DB_DELETED_ROWS_KEY = 'bp_deleted_rows_v1';
+var DB_LAST_REMOTE_LOAD_KEY = 'bp_last_remote_load_v1';
+var DB_DERIVED_VERSION_KEY = 'bp_derived_version_v1';
+var DB_DERIVED_VERSION = 'derived-sales-v1';
+var REMOTE_REFRESH_MIN_MS = 120000;
 var SUPABASE_LOAD_PROMISE = null;
 var SUPABASE_SAVE_TIMER = null;
 var SUPABASE_SAVING = false;
@@ -474,6 +478,19 @@ function persistLocalDB(){
   updateSyncUI();
   return snapshot;
 }
+function getLastRemoteLoadAt(){
+  var raw = storageGet(DB_LAST_REMOTE_LOAD_KEY);
+  var ts = raw ? Date.parse(raw) : 0;
+  return isNaN(ts) ? 0 : ts;
+}
+function markRemoteLoaded(){
+  storageSet(DB_LAST_REMOTE_LOAD_KEY, new Date().toISOString());
+}
+function shouldRefreshRemote(force){
+  if(force) return true;
+  if(hasPendingSync()) return true;
+  return (Date.now() - getLastRemoteLoadAt()) > REMOTE_REFRESH_MIN_MS;
+}
 function restoreLocalDB(){
   var parsed = safeJsonParse(storageGet(DB_CACHE_KEY));
   if(!parsed || typeof DB === 'undefined' || !DB) return false;
@@ -486,6 +503,15 @@ function restoreLocalDB(){
     }
   });
   return restored;
+}
+function repairDerivedDataIfNeeded(){
+  if(storageGet(DB_DERIVED_VERSION_KEY) === DB_DERIVED_VERSION) return false;
+  if(typeof DB === 'undefined' || !DB) return false;
+  DB.traitements.forEach(function(t){ syncTraitementVentes(t); });
+  DB.rdv.forEach(function(r){ syncRdvVentes(r, r.mode || 'Especes'); });
+  persistLocalDB();
+  storageSet(DB_DERIVED_VERSION_KEY, DB_DERIVED_VERSION);
+  return true;
 }
 function setStatusPill(id, text, kind){
   var el = document.getElementById(id);
@@ -541,7 +567,7 @@ function registerServiceWorker(){
   if(!('serviceWorker' in navigator)) return;
   if(location.protocol !== 'https:' && location.hostname !== 'localhost') return;
   (window.__BP_BOOT_CLEANUP__ || Promise.resolve()).then(function(){
-    return navigator.serviceWorker.register('./sw.js?v=20260531e');
+    return navigator.serviceWorker.register('./sw.js?v=20260531f');
   }).catch(function(err){
     console.error('Service worker registration failed', err);
   });
@@ -555,7 +581,7 @@ function loadFreshDBAfterSync(force){
   return loadDBFromSupabase(!!force);
 }
 function refreshAppDataInBackground(force, page){
-  if(!hasSupabaseAccess() || navigator.onLine === false) return Promise.resolve(false);
+  if(!hasSupabaseAccess() || navigator.onLine === false || !shouldRefreshRemote(force)) return Promise.resolve(false);
   return loadFreshDBAfterSync(!!force).then(function(result){
     if(page && typeof go === 'function' && AUTHENTICATED){
       go(page);
@@ -1283,6 +1309,8 @@ function loadDBFromSupabase(force){
       ventes: results[9].data || []
     };
     assignRemoteDB(payload);
+    markRemoteLoaded();
+    storageSet(DB_DERIVED_VERSION_KEY, DB_DERIVED_VERSION);
     clearPendingSync();
     return true;
   }, function(err){
@@ -1587,9 +1615,7 @@ function mVenteEdit(id){ var v=DB.ventes.find(function(x){return x.id===id;}); i
 function delDepense(id){ confirmDel('Supprimer cette depense ?',function(){ queueDeletedRow('ventes', id); DB.ventes=DB.ventes.filter(function(x){return x.id!==id;}); go('depenses'); }); }
 function delVente(id){ var v=DB.ventes.find(function(x){return x.id===id;}); if(v && v.type==='traitement'){ alert('Les transactions de traitement se suppriment depuis l onglet Traitements.'); return; } if(v && v.type==='prestation' && (v.traitementKind||'')==='rdv'){ alert('Les ventes generees depuis un rendez-vous se suppriment depuis l onglet Rendez-vous.'); return; } confirmDel('Supprimer cette vente ?',function(){ var vv=DB.ventes.find(function(x){return x.id===id;}); restoreSaleStock(vv); queueDeletedRow('ventes', id); DB.ventes=DB.ventes.filter(function(x){return x.id!==id;}); go('ventes'); }); }
 restoreLocalDB();
-DB.traitements.forEach(function(t){ syncTraitementVentes(t); });
-DB.rdv.forEach(function(r){ syncRdvVentes(r, r.mode || 'Especes'); });
-persistLocalDB();
+repairDerivedDataIfNeeded();
 if($('AUTHCODE')){
   $('AUTHCODE').addEventListener('input', function(){ this.value = this.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,5); });
   $('AUTHCODE').addEventListener('keydown', function(e){ if(e.key==='Enter') submitAuth(); });
@@ -1629,8 +1655,12 @@ window.addEventListener('offline', function(){
 updateNetworkUI();
 updateSyncUI();
 updateInstallUI();
-registerServiceWorker();
 updateRoleUI();
+window.addEventListener('load', function(){
+  setTimeout(function(){
+    registerServiceWorker();
+  }, 300);
+});
 if(AUTHENTICATED){
   unlockApp();
   go(defaultPageForRole());
