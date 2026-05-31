@@ -8,8 +8,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Beautiful Penda">
-<link rel="manifest" href="./manifest.webmanifest?v=20260531a">
-<link rel="apple-touch-icon" href="./beautiful-penda-logo.png?v=20260531a">
+<link rel="manifest" href="./manifest.webmanifest?v=20260531b">
+<link rel="apple-touch-icon" href="./beautiful-penda-logo.png?v=20260531b">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#f5f4f0;color:#1a1a18;font-size:14px}
@@ -158,10 +158,9 @@ table{font-size:12px}
 th,td{padding:6px 7px}
 }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 (function(){
-  var APP_BUILD = 'beautiful-penda-20260531a';
+  var APP_BUILD = 'beautiful-penda-20260531b';
   var BUILD_KEY = 'bp_app_build';
   function resolved(value){
     return Promise.resolve(value);
@@ -212,7 +211,7 @@ th,td{padding:6px 7px}
 <body>
 <div class="auth-screen" id="LOGIN">
   <div class="auth-card">
-    <div class="auth-brand"><img class="auth-logo" src="./beautiful-penda-logo.png?v=20260531a" alt="Logo Beautiful Penda"></div>
+    <div class="auth-brand"><img class="auth-logo" src="./beautiful-penda-logo.png?v=20260531b" alt="Logo Beautiful Penda"></div>
     <div class="auth-title">Acc&egrave;s s&eacute;curis&eacute;</div>
     <div class="auth-sub">Saisissez votre code &agrave; 5 caract&egrave;res pour acc&eacute;der &agrave; l'application en mode administrateur ou employ&eacute;.</div>
     <form id="AUTHFORM" onsubmit="authSubmit(); return false;" action="javascript:void(0)">
@@ -298,9 +297,35 @@ var AUTH_CODES_BOOT = {admin:'AD123', employe:'EMP01'};
 var AUTH_CODES_CACHE_KEY = 'bp_auth_codes_cache';
 var SUPABASE_URL = 'https://ebsivpzmjeutiynsuvpg.supabase.co';
 var SUPABASE_KEY = 'sb_publishable_0hTdrvUMb3ByPQfetA7vBg_YHVSJrWY';
-var SUPABASE_CLIENT = window.supabase && window.supabase.createClient
-  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY)
-  : null;
+var SUPABASE_CLIENT = null;
+function attachSupabaseClient(){
+  if(SUPABASE_CLIENT) return SUPABASE_CLIENT;
+  if(window.supabase && window.supabase.createClient){
+    SUPABASE_CLIENT = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  }
+  return SUPABASE_CLIENT;
+}
+function loadSupabaseSdk(){
+  if(attachSupabaseClient()) return Promise.resolve(SUPABASE_CLIENT);
+  if(window.__BP_SUPABASE_LOADING__) return window.__BP_SUPABASE_LOADING__;
+  window.__BP_SUPABASE_LOADING__ = new Promise(function(resolve){
+    var done = false;
+    var script = document.createElement('script');
+    function finish(value){
+      if(done) return;
+      done = true;
+      resolve(value || attachSupabaseClient() || null);
+    }
+    script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+    script.async = true;
+    script.defer = true;
+    script.onload = function(){ finish(); };
+    script.onerror = function(){ finish(null); };
+    setTimeout(function(){ finish(null); }, 5000);
+    (document.head || document.documentElement).appendChild(script);
+  });
+  return window.__BP_SUPABASE_LOADING__;
+}
 var DB_CACHE_KEY = 'bp_db_cache_v1';
 var DB_PENDING_SYNC_KEY = 'bp_pending_sync_v1';
 var DB_LAST_SYNC_KEY = 'bp_last_sync_v1';
@@ -341,6 +366,41 @@ function getAuthRoleFromCode(code){
   if(normalized === AUTH_CODES_BOOT.admin) return 'admin';
   if(normalized === AUTH_CODES_BOOT.employe) return 'employe';
   return getCachedAuthCodes()[normalized] || null;
+}
+function lookupAuthCodeRemote(code, onSuccess, onError){
+  if(!window.XMLHttpRequest){
+    if(onError) onError(new Error('XMLHttpRequest indisponible'));
+    return;
+  }
+  try {
+    var xhr = new XMLHttpRequest();
+    var url = SUPABASE_URL + '/rest/v1/access_codes?select=role&code=eq.' + encodeURIComponent(code) + '&is_active=eq.true&limit=1';
+    xhr.open('GET', url, true);
+    xhr.timeout = 4000;
+    xhr.setRequestHeader('apikey', SUPABASE_KEY);
+    xhr.setRequestHeader('Authorization', 'Bearer ' + SUPABASE_KEY);
+    xhr.setRequestHeader('Accept', 'application/json');
+    xhr.onreadystatechange = function(){
+      if(xhr.readyState !== 4) return;
+      if(xhr.status >= 200 && xhr.status < 300){
+        var data = [];
+        try { data = xhr.responseText ? JSON.parse(xhr.responseText) : []; } catch(parseErr){}
+        var role = data && data[0] ? data[0].role : null;
+        if(onSuccess) onSuccess(role);
+        return;
+      }
+      if(onError) onError(new Error('HTTP ' + xhr.status));
+    };
+    xhr.onerror = function(){
+      if(onError) onError(new Error('NETWORK'));
+    };
+    xhr.ontimeout = function(){
+      if(onError) onError(new Error('TIMEOUT'));
+    };
+    xhr.send();
+  } catch(err){
+    if(onError) onError(err);
+  }
 }
 function getDeletedRows(){
   return safeJsonParse(storageGet(DB_DELETED_ROWS_KEY)) || {};
@@ -461,7 +521,7 @@ function registerServiceWorker(){
   if(!('serviceWorker' in navigator)) return;
   if(location.protocol !== 'https:' && location.hostname !== 'localhost') return;
   (window.__BP_BOOT_CLEANUP__ || Promise.resolve()).then(function(){
-    return navigator.serviceWorker.register('./sw.js?v=20260531a');
+    return navigator.serviceWorker.register('./sw.js?v=20260531b');
   }).catch(function(err){
     console.error('Service worker registration failed', err);
   });
@@ -557,31 +617,31 @@ function authSubmit(){
         err.innerHTML = message || 'Code invalide. R&eacute;essayez.';
         err.style.display = 'block';
       }
-      if(btn) btn.disabled = false;
+      if(btn) btn.textContent = 'Se connecter';
       try { alert('Code invalide.'); } catch(alertErr){}
       return false;
     };
 
     var localRole = getAuthRoleFromCode(code);
     if(localRole){
-      if(btn) btn.disabled = false;
+      if(btn) btn.textContent = 'Se connecter';
       return finishLogin(localRole);
     }
 
-    if(SUPABASE_CLIENT){
-      if(btn) btn.disabled = true;
+    if(SUPABASE_URL && SUPABASE_KEY){
+      if(btn) btn.textContent = 'Connexion...';
       var settled = false;
       var finishRemote = function(role){
         if(settled) return;
         settled = true;
-        if(btn) btn.disabled = false;
+        if(btn) btn.textContent = 'Se connecter';
         cacheAuthCode(code, role);
         finishLogin(role);
       };
       var failRemote = function(message){
         if(settled) return;
         settled = true;
-        if(btn) btn.disabled = false;
+        if(btn) btn.textContent = 'Se connecter';
         if(err){
           err.innerHTML = message || 'Connexion impossible. R&eacute;essayez.';
           err.style.display = 'block';
@@ -596,31 +656,24 @@ function authSubmit(){
         }
         failRemote('Connexion trop lente. R&eacute;essayez.');
       }, 4000);
-      SUPABASE_CLIENT
-        .from('access_codes')
-        .select('role')
-        .eq('code', code)
-        .eq('is_active', true)
-        .limit(1)
-        .then(function(res){
-          if(settled) return;
-          var role = res && res.data && res.data[0] ? res.data[0].role : null;
-          if(!role) role = getAuthRoleFromCode(code);
-          if(!role){
-            showInvalid();
-            return;
-          }
-          finishRemote(role);
-        }, function(remoteLoginErr){
-          if(settled) return;
-          console.error(remoteLoginErr);
-          var role = getAuthRoleFromCode(code);
-          if(!role){
-            failRemote('Connexion impossible. R&eacute;essayez.');
-            return;
-          }
-          finishRemote(role);
-        });
+      lookupAuthCodeRemote(code, function(role){
+        if(settled) return;
+        if(!role) role = getAuthRoleFromCode(code);
+        if(!role){
+          showInvalid();
+          return;
+        }
+        finishRemote(role);
+      }, function(remoteLoginErr){
+        if(settled) return;
+        console.error(remoteLoginErr);
+        var role = getAuthRoleFromCode(code);
+        if(!role){
+          failRemote('Connexion impossible. R&eacute;essayez.');
+          return;
+        }
+        finishRemote(role);
+      });
       return false;
     }
 
@@ -632,7 +685,7 @@ function authSubmit(){
   } catch(e) {
     var err2 = document.getElementById('AUTHERR');
     var btn2 = document.getElementById('AUTHBTN');
-    if(btn2) btn2.disabled = false;
+    if(btn2) btn2.textContent = 'Se connecter';
     if(err2){
       err2.textContent = 'Erreur de connexion: ' + e.message;
       err2.style.display = 'block';
@@ -1549,6 +1602,14 @@ updateSyncUI();
 updateInstallUI();
 registerServiceWorker();
 updateRoleUI();
+loadSupabaseSdk().then(function(client){
+  if(!client || !AUTHENTICATED) return;
+  loadFreshDBAfterSync(true).then(function(){
+    if(typeof go === 'function') go(defaultPageForRole());
+  }, function(){
+    if(typeof go === 'function') go(defaultPageForRole());
+  });
+});
 if(AUTHENTICATED){
   unlockApp();
   if(SUPABASE_CLIENT){
