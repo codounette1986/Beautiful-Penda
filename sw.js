@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beautiful-penda-v9';
+const CACHE_NAME = 'beautiful-penda-v10';
 const APP_SHELL = [
   './',
   './index.html',
@@ -44,14 +44,23 @@ self.addEventListener('fetch', function(event){
 
   if(request.mode === 'navigate'){
     event.respondWith(
-      fetch(request).then(function(response){
-        var copy = response.clone();
-        caches.open(CACHE_NAME).then(function(cache){
-          cache.put('./index.html', copy);
+      caches.match('./index.html').then(function(cached){
+        var networkFetch = fetch(request).then(function(response){
+          var copy = response.clone();
+          caches.open(CACHE_NAME).then(function(cache){
+            cache.put('./index.html', copy);
+          });
+          return response;
+        }).catch(function(){
+          return cached || Response.error();
         });
-        return response;
-      }).catch(function(){
-        return caches.match('./index.html');
+
+        if(cached){
+          event.waitUntil(networkFetch.then(function(){ return true; }, function(){ return false; }));
+          return cached;
+        }
+
+        return networkFetch;
       })
     );
     return;
