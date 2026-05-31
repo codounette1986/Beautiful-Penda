@@ -8,8 +8,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Beautiful Penda">
-<link rel="manifest" href="./manifest.webmanifest?v=20260531d">
-<link rel="apple-touch-icon" href="./beautiful-penda-logo.png?v=20260531d">
+<link rel="manifest" href="./manifest.webmanifest?v=20260531e">
+<link rel="apple-touch-icon" href="./beautiful-penda-logo.png?v=20260531e">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#f5f4f0;color:#1a1a18;font-size:14px}
@@ -160,7 +160,7 @@ th,td{padding:6px 7px}
 </style>
 <script>
 (function(){
-  var APP_BUILD = 'beautiful-penda-20260531d';
+  var APP_BUILD = 'beautiful-penda-20260531e';
   var BUILD_KEY = 'bp_app_build';
   function resolved(value){
     return Promise.resolve(value);
@@ -211,7 +211,7 @@ th,td{padding:6px 7px}
 <body>
 <div class="auth-screen" id="LOGIN">
   <div class="auth-card">
-    <div class="auth-brand"><img class="auth-logo" src="./beautiful-penda-logo.png?v=20260531d" alt="Logo Beautiful Penda"></div>
+    <div class="auth-brand"><img class="auth-logo" src="./beautiful-penda-logo.png?v=20260531e" alt="Logo Beautiful Penda"></div>
     <div class="auth-title">Acc&egrave;s s&eacute;curis&eacute;</div>
     <div class="auth-sub">Saisissez votre code &agrave; 5 caract&egrave;res pour acc&eacute;der &agrave; l'application en mode administrateur ou employ&eacute;.</div>
     <form id="AUTHFORM" onsubmit="authSubmit(); return false;" action="javascript:void(0)">
@@ -541,7 +541,7 @@ function registerServiceWorker(){
   if(!('serviceWorker' in navigator)) return;
   if(location.protocol !== 'https:' && location.hostname !== 'localhost') return;
   (window.__BP_BOOT_CLEANUP__ || Promise.resolve()).then(function(){
-    return navigator.serviceWorker.register('./sw.js?v=20260531d');
+    return navigator.serviceWorker.register('./sw.js?v=20260531e');
   }).catch(function(err){
     console.error('Service worker registration failed', err);
   });
@@ -553,6 +553,18 @@ function syncPendingIfPossible(){
 function loadFreshDBAfterSync(force){
   SUPABASE_LOAD_PROMISE = null;
   return loadDBFromSupabase(!!force);
+}
+function refreshAppDataInBackground(force, page){
+  if(!hasSupabaseAccess() || navigator.onLine === false) return Promise.resolve(false);
+  return loadFreshDBAfterSync(!!force).then(function(result){
+    if(page && typeof go === 'function' && AUTHENTICATED){
+      go(page);
+    }
+    return result;
+  }, function(err){
+    console.error(err);
+    return false;
+  });
 }
 function isDbDirty(snapshot){
   var current = snapshot || storageGet(DB_CACHE_KEY) || '';
@@ -620,14 +632,9 @@ function authSubmit(){
         }, 50);
       };
 
+      openDefaultPage();
       if(typeof loadDBFromSupabase === 'function'){
-        SUPABASE_LOAD_PROMISE = loadFreshDBAfterSync(true)
-          .then(function(){ openDefaultPage(); }, function(remoteErr){
-            console.error(remoteErr);
-            openDefaultPage();
-          });
-      } else {
-        openDefaultPage();
+        refreshAppDataInBackground(true, role === 'admin' ? 'dash' : 'clients');
       }
       return false;
     };
@@ -1612,9 +1619,7 @@ window.addEventListener('online', function(){
   updateSyncUI();
   syncPendingIfPossible();
   if(AUTHENTICATED && hasSupabaseAccess() && !hasPendingSync()){
-    loadFreshDBAfterSync(true).then(function(){
-      if(typeof go === 'function') go(defaultPageForRole());
-    });
+    refreshAppDataInBackground(true, defaultPageForRole());
   }
 });
 window.addEventListener('offline', function(){
@@ -1628,14 +1633,9 @@ registerServiceWorker();
 updateRoleUI();
 if(AUTHENTICATED){
   unlockApp();
+  go(defaultPageForRole());
   if(hasSupabaseAccess()){
-    loadFreshDBAfterSync(true).then(function(){
-      go(defaultPageForRole());
-    }, function(){
-      go(defaultPageForRole());
-    });
-  } else {
-    go(defaultPageForRole());
+    refreshAppDataInBackground(true, defaultPageForRole());
   }
 } else {
   lockApp();
