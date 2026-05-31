@@ -8,8 +8,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Beautiful Penda">
-<link rel="manifest" href="./manifest.webmanifest?v=20260516a">
-<link rel="apple-touch-icon" href="./beautiful-penda-logo.png?v=20260516a">
+<link rel="manifest" href="./manifest.webmanifest?v=20260531a">
+<link rel="apple-touch-icon" href="./beautiful-penda-logo.png?v=20260531a">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#f5f4f0;color:#1a1a18;font-size:14px}
@@ -161,7 +161,7 @@ th,td{padding:6px 7px}
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 (function(){
-  var APP_BUILD = 'beautiful-penda-20260516a';
+  var APP_BUILD = 'beautiful-penda-20260531a';
   var BUILD_KEY = 'bp_app_build';
   function resolved(value){
     return Promise.resolve(value);
@@ -212,7 +212,7 @@ th,td{padding:6px 7px}
 <body>
 <div class="auth-screen" id="LOGIN">
   <div class="auth-card">
-    <div class="auth-brand"><img class="auth-logo" src="./beautiful-penda-logo.png?v=20260516a" alt="Logo Beautiful Penda"></div>
+    <div class="auth-brand"><img class="auth-logo" src="./beautiful-penda-logo.png?v=20260531a" alt="Logo Beautiful Penda"></div>
     <div class="auth-title">Acc&egrave;s s&eacute;curis&eacute;</div>
     <div class="auth-sub">Saisissez votre code &agrave; 5 caract&egrave;res pour acc&eacute;der &agrave; l'application en mode administrateur ou employ&eacute;.</div>
     <form id="AUTHFORM" onsubmit="authSubmit(); return false;" action="javascript:void(0)">
@@ -257,6 +257,31 @@ if(!Array.prototype.findIndex){
       if(predicate.call(thisArg, this[i], i, this)) return i;
     }
     return -1;
+  };
+}
+if(!Array.prototype.find){
+  Array.prototype.find = function(predicate, thisArg){
+    for(var i=0;i<this.length;i++){
+      if(predicate.call(thisArg, this[i], i, this)) return this[i];
+    }
+    return undefined;
+  };
+}
+if(typeof Object.assign !== 'function'){
+  Object.assign = function(target){
+    if(target == null) throw new TypeError('Cannot convert undefined or null to object');
+    var to = Object(target);
+    for(var i=1;i<arguments.length;i++){
+      var source = arguments[i];
+      if(source != null){
+        for(var key in source){
+          if(Object.prototype.hasOwnProperty.call(source, key)){
+            to[key] = source[key];
+          }
+        }
+      }
+    }
+    return to;
   };
 }
 if(window.NodeList && !NodeList.prototype.forEach){
@@ -420,7 +445,7 @@ function registerServiceWorker(){
   if(!('serviceWorker' in navigator)) return;
   if(location.protocol !== 'https:' && location.hostname !== 'localhost') return;
   (window.__BP_BOOT_CLEANUP__ || Promise.resolve()).then(function(){
-    return navigator.serviceWorker.register('./sw.js?v=20260516a');
+    return navigator.serviceWorker.register('./sw.js?v=20260531a');
   }).catch(function(err){
     console.error('Service worker registration failed', err);
   });
@@ -1433,8 +1458,6 @@ function mDepense(id){ var d=id?DB.ventes.find(function(x){return x.id===id && x
 function mVenteEdit(id){ var v=DB.ventes.find(function(x){return x.id===id;}); if(!v) return; if(v.type==='traitement'){ alert('Les transactions de traitement se modifient depuis l onglet Traitements.'); return; } if(v.type==='prestation' && (v.traitementKind||'')==='rdv'){ alert('Les ventes generees depuis un rendez-vous se modifient depuis l onglet Rendez-vous.'); return; } var cOpts=DB.clients.map(function(c){return '<option value="'+c.id+'" '+(v.cId===c.id?'selected':'')+'>'+esc(c.nom)+'</option>';}).join(''); var mOpts=['Especes','Wave','Orange Money'].map(function(m){return '<option '+(v.mode===m?'selected':'')+'>'+esc(m)+'</option>';}).join(''); OM('<div class="overlay" onclick="if(event.target===this)CM()"><div class="modal"><div class="mh"><h3>Modifier la vente</h3><button class="xb" onclick="CM()">x</button></div><div class="mb"><div class="form-group"><label>Cliente</label><select id="FCI">'+cOpts+'</select></div><div class="form-group"><label>Description</label><input id="FDE" value="'+esc(v.desc)+'"></div><div class="form-group"><label>Montant (FCFA)</label><input type="number" id="FMO" value="'+v.montant+'"></div><div class="form-group"><label>Mode de paiement</label><select id="FMD">'+mOpts+'</select></div></div><div class="mf"><button class="btn" onclick="CM()">Annuler</button><button class="btn btn-primary" id="SB">Enregistrer</button></div></div></div>'); $('SB').onclick=function(){ v.cId=parseInt($('FCI').value,10); v.desc=$('FDE').value; v.montant=parseInt($('FMO').value,10)||0; v.mode=$('FMD').value; CM(); go('ventes'); }; }
 function delDepense(id){ confirmDel('Supprimer cette depense ?',function(){ queueDeletedRow('ventes', id); DB.ventes=DB.ventes.filter(function(x){return x.id!==id;}); go('depenses'); }); }
 function delVente(id){ var v=DB.ventes.find(function(x){return x.id===id;}); if(v && v.type==='traitement'){ alert('Les transactions de traitement se suppriment depuis l onglet Traitements.'); return; } if(v && v.type==='prestation' && (v.traitementKind||'')==='rdv'){ alert('Les ventes generees depuis un rendez-vous se suppriment depuis l onglet Rendez-vous.'); return; } confirmDel('Supprimer cette vente ?',function(){ var vv=DB.ventes.find(function(x){return x.id===id;}); restoreSaleStock(vv); queueDeletedRow('ventes', id); DB.ventes=DB.ventes.filter(function(x){return x.id!==id;}); go('ventes'); }); }
-DB.traitements.forEach(function(t){ syncTraitementVentes(t); });
-DB.rdv.forEach(function(r){ syncRdvVentes(r, r.mode || 'Especes'); });
 restoreLocalDB();
 DB.traitements.forEach(function(t){ syncTraitementVentes(t); });
 DB.rdv.forEach(function(r){ syncRdvVentes(r, r.mode || 'Especes'); });
