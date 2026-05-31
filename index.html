@@ -8,8 +8,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Beautiful Penda">
-<link rel="manifest" href="./manifest.webmanifest?v=20260531g">
-<link rel="apple-touch-icon" href="./beautiful-penda-logo.png?v=20260531g">
+<link rel="manifest" href="./manifest.webmanifest?v=20260531h">
+<link rel="apple-touch-icon" href="./beautiful-penda-logo.png?v=20260531h">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#f5f4f0;color:#1a1a18;font-size:14px}
@@ -160,45 +160,16 @@ th,td{padding:6px 7px}
 </style>
 <script>
 (function(){
-  var APP_BUILD = 'beautiful-penda-20260531g';
+  var APP_BUILD = 'beautiful-penda-20260531h';
   var BUILD_KEY = 'bp_app_build';
   function resolved(value){
     return Promise.resolve(value);
-  }
-  function cleanupLegacyPwa(){
-    var tasks = [];
-    if('serviceWorker' in navigator){
-      tasks.push(
-        navigator.serviceWorker.getRegistrations().then(function(registrations){
-          return Promise.all((registrations || []).map(function(reg){
-            return reg.unregister();
-          }));
-        }, function(){
-          return [];
-        })
-      );
-    }
-    if('caches' in window){
-      tasks.push(
-        caches.keys().then(function(keys){
-          return Promise.all((keys || []).map(function(key){
-            if(String(key).indexOf('beautiful-penda-') === 0){
-              return caches.delete(key);
-            }
-            return resolved(false);
-          }));
-        }, function(){
-          return [];
-        })
-      );
-    }
-    return Promise.all(tasks);
   }
   try {
     var previousBuild = window.localStorage ? localStorage.getItem(BUILD_KEY) : null;
     if(previousBuild !== APP_BUILD){
       if(window.localStorage) localStorage.setItem(BUILD_KEY, APP_BUILD);
-      window.__BP_BOOT_CLEANUP__ = cleanupLegacyPwa();
+      window.__BP_BOOT_CLEANUP__ = resolved([]);
     } else {
       window.__BP_BOOT_CLEANUP__ = resolved([]);
     }
@@ -211,7 +182,7 @@ th,td{padding:6px 7px}
 <body>
 <div class="auth-screen" id="LOGIN">
   <div class="auth-card">
-    <div class="auth-brand"><img class="auth-logo" src="./beautiful-penda-logo.png?v=20260531g" alt="Logo Beautiful Penda"></div>
+    <div class="auth-brand"><img class="auth-logo" src="./beautiful-penda-logo.png?v=20260531h" alt="Logo Beautiful Penda"></div>
     <div class="auth-title">Acc&egrave;s s&eacute;curis&eacute;</div>
     <div class="auth-sub">Saisissez votre code &agrave; 5 caract&egrave;res pour acc&eacute;der &agrave; l'application en mode administrateur ou employ&eacute;.</div>
     <form id="AUTHFORM" onsubmit="authSubmit(); return false;" action="javascript:void(0)">
@@ -305,8 +276,12 @@ var DB_SYNCED_SNAPSHOT_KEY = 'bp_synced_snapshot_v1';
 var DB_DELETED_ROWS_KEY = 'bp_deleted_rows_v1';
 var DB_LAST_REMOTE_LOAD_KEY = 'bp_last_remote_load_v1';
 var DB_DERIVED_VERSION_KEY = 'bp_derived_version_v1';
+var PWA_CLEANUP_BUILD_KEY = 'bp_pwa_cleanup_build_v1';
 var DB_DERIVED_VERSION = 'derived-sales-v1';
 var REMOTE_REFRESH_MIN_MS = 120000;
+var STARTUP_PENDING_SYNC_DELAY_MS = 3500;
+var STARTUP_REMOTE_REFRESH_DELAY_MS = 6000;
+var PWA_CLEANUP_BUILD = 'cleanup-20260531h';
 var SUPABASE_LOAD_PROMISE = null;
 var SUPABASE_SAVE_TIMER = null;
 var SUPABASE_SAVING = false;
@@ -564,13 +539,33 @@ function installPwa(){
   }
 }
 function registerServiceWorker(){
+  return;
+}
+function cleanupLegacyPwaAsync(){
+  if(storageGet(PWA_CLEANUP_BUILD_KEY) === PWA_CLEANUP_BUILD) return;
+  storageSet(PWA_CLEANUP_BUILD_KEY, PWA_CLEANUP_BUILD);
   if(!('serviceWorker' in navigator)) return;
-  if(location.protocol !== 'https:' && location.hostname !== 'localhost') return;
-  (window.__BP_BOOT_CLEANUP__ || Promise.resolve()).then(function(){
-    return navigator.serviceWorker.register('./sw.js?v=20260531g');
-  }).catch(function(err){
-    console.error('Service worker registration failed', err);
-  });
+  navigator.serviceWorker.getRegistrations().then(function(registrations){
+    (registrations || []).forEach(function(reg){
+      reg.unregister();
+    });
+  }, function(){});
+  if('caches' in window && caches.keys){
+    caches.keys().then(function(keys){
+      (keys || []).forEach(function(key){
+        if(String(key).indexOf('beautiful-penda-') === 0){
+          caches.delete(key);
+        }
+      });
+    }, function(){});
+  }
+}
+function schedulePendingSync(delayMs){
+  if(!AUTHENTICATED || !hasSupabaseAccess()) return;
+  setTimeout(function(){
+    if(!AUTHENTICATED || !hasSupabaseAccess()) return;
+    syncPendingIfPossible();
+  }, delayMs || STARTUP_PENDING_SYNC_DELAY_MS);
 }
 function syncPendingIfPossible(){
   if(!AUTHENTICATED || !hasSupabaseAccess() || navigator.onLine === false || !hasPendingSync()) return Promise.resolve(false);
@@ -591,6 +586,13 @@ function refreshAppDataInBackground(force, page){
     console.error(err);
     return false;
   });
+}
+function scheduleBackgroundRefresh(force, page, delayMs){
+  if(!AUTHENTICATED) return;
+  setTimeout(function(){
+    if(!AUTHENTICATED) return;
+    refreshAppDataInBackground(!!force, page);
+  }, delayMs || 2000);
 }
 function isDbDirty(snapshot){
   var current = snapshot || storageGet(DB_CACHE_KEY) || '';
@@ -659,9 +661,9 @@ function authSubmit(){
       };
 
       openDefaultPage();
-      if(typeof loadDBFromSupabase === 'function'){
-        refreshAppDataInBackground(true, role === 'admin' ? 'dash' : 'clients');
-      }
+        if(typeof loadDBFromSupabase === 'function'){
+          scheduleBackgroundRefresh(true, role === 'admin' ? 'dash' : 'clients', STARTUP_REMOTE_REFRESH_DELAY_MS);
+        }
       return false;
     };
 
@@ -1268,18 +1270,11 @@ function exportDBForSupabase(){
 function loadDBFromSupabase(force){
   if(!hasSupabaseAccess()) return Promise.resolve(false);
   if(hasPendingSync()){
-    if(navigator.onLine !== false){
-      return saveDBToSupabase().then(function(){
-        SUPABASE_LOAD_PROMISE = null;
-        return loadDBFromSupabase(!!force);
-      }, function(){
-        restoreLocalDB();
-        updateSyncUI();
-        return 'local-pending';
-      });
-    }
     restoreLocalDB();
     updateSyncUI();
+    if(navigator.onLine !== false){
+      schedulePendingSync(STARTUP_PENDING_SYNC_DELAY_MS);
+    }
     return Promise.resolve('local-pending');
   }
   if(SUPABASE_LOAD_PROMISE && !force) return SUPABASE_LOAD_PROMISE;
@@ -1454,7 +1449,7 @@ function unlockApp(){
   if($('AUTHERR')) $('AUTHERR').style.display='none';
   updateNetworkUI();
   updateSyncUI();
-  syncPendingIfPossible();
+  schedulePendingSync(STARTUP_PENDING_SYNC_DELAY_MS);
 }
 function lockApp(){
   AUTHENTICATED = false;
@@ -1643,9 +1638,9 @@ window.addEventListener('appinstalled', function(){
 window.addEventListener('online', function(){
   updateNetworkUI();
   updateSyncUI();
-  syncPendingIfPossible();
-  if(AUTHENTICATED && hasSupabaseAccess() && !hasPendingSync()){
-    refreshAppDataInBackground(true, defaultPageForRole());
+  schedulePendingSync(STARTUP_PENDING_SYNC_DELAY_MS);
+  if(AUTHENTICATED && hasSupabaseAccess()){
+    scheduleBackgroundRefresh(true, defaultPageForRole(), STARTUP_REMOTE_REFRESH_DELAY_MS);
   }
 });
 window.addEventListener('offline', function(){
@@ -1658,6 +1653,7 @@ updateInstallUI();
 updateRoleUI();
 window.addEventListener('load', function(){
   setTimeout(function(){
+    cleanupLegacyPwaAsync();
     registerServiceWorker();
   }, 300);
 });
@@ -1665,7 +1661,7 @@ if(AUTHENTICATED){
   unlockApp();
   go(defaultPageForRole());
   if(hasSupabaseAccess()){
-    refreshAppDataInBackground(true, defaultPageForRole());
+    scheduleBackgroundRefresh(false, defaultPageForRole(), STARTUP_REMOTE_REFRESH_DELAY_MS);
   }
 } else {
   lockApp();
