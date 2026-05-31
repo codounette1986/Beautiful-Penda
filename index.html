@@ -8,8 +8,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Beautiful Penda">
-<link rel="manifest" href="./manifest.webmanifest?v=20260531b">
-<link rel="apple-touch-icon" href="./beautiful-penda-logo.png?v=20260531b">
+<link rel="manifest" href="./manifest.webmanifest?v=20260531c">
+<link rel="apple-touch-icon" href="./beautiful-penda-logo.png?v=20260531c">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#f5f4f0;color:#1a1a18;font-size:14px}
@@ -160,7 +160,7 @@ th,td{padding:6px 7px}
 </style>
 <script>
 (function(){
-  var APP_BUILD = 'beautiful-penda-20260531b';
+  var APP_BUILD = 'beautiful-penda-20260531c';
   var BUILD_KEY = 'bp_app_build';
   function resolved(value){
     return Promise.resolve(value);
@@ -211,7 +211,7 @@ th,td{padding:6px 7px}
 <body>
 <div class="auth-screen" id="LOGIN">
   <div class="auth-card">
-    <div class="auth-brand"><img class="auth-logo" src="./beautiful-penda-logo.png?v=20260531b" alt="Logo Beautiful Penda"></div>
+    <div class="auth-brand"><img class="auth-logo" src="./beautiful-penda-logo.png?v=20260531c" alt="Logo Beautiful Penda"></div>
     <div class="auth-title">Acc&egrave;s s&eacute;curis&eacute;</div>
     <div class="auth-sub">Saisissez votre code &agrave; 5 caract&egrave;res pour acc&eacute;der &agrave; l'application en mode administrateur ou employ&eacute;.</div>
     <form id="AUTHFORM" onsubmit="authSubmit(); return false;" action="javascript:void(0)">
@@ -367,6 +367,55 @@ function getAuthRoleFromCode(code){
   if(normalized === AUTH_CODES_BOOT.employe) return 'employe';
   return getCachedAuthCodes()[normalized] || null;
 }
+function hasSupabaseAccess(){
+  return !!(SUPABASE_URL && SUPABASE_KEY);
+}
+function supabaseRestRequest(method, path, body, extraHeaders){
+  return new Promise(function(resolve, reject){
+    if(!window.XMLHttpRequest || !hasSupabaseAccess()){
+      reject(new Error('SUPABASE_UNAVAILABLE'));
+      return;
+    }
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open(method, SUPABASE_URL + path, true);
+      xhr.timeout = 12000;
+      xhr.setRequestHeader('apikey', SUPABASE_KEY);
+      xhr.setRequestHeader('Authorization', 'Bearer ' + SUPABASE_KEY);
+      xhr.setRequestHeader('Accept', 'application/json');
+      if(body != null) xhr.setRequestHeader('Content-Type', 'application/json');
+      if(extraHeaders){
+        for(var key in extraHeaders){
+          if(Object.prototype.hasOwnProperty.call(extraHeaders, key) && extraHeaders[key] != null){
+            xhr.setRequestHeader(key, extraHeaders[key]);
+          }
+        }
+      }
+      xhr.onreadystatechange = function(){
+        if(xhr.readyState !== 4) return;
+        if(xhr.status >= 200 && xhr.status < 300){
+          var data = null;
+          try { data = xhr.responseText ? JSON.parse(xhr.responseText) : null; } catch(parseErr){}
+          resolve({ data: data, status: xhr.status });
+          return;
+        }
+        reject(new Error('HTTP ' + xhr.status + ' ' + (xhr.responseText || '')));
+      };
+      xhr.onerror = function(){ reject(new Error('NETWORK')); };
+      xhr.ontimeout = function(){ reject(new Error('TIMEOUT')); };
+      xhr.send(body == null ? null : JSON.stringify(body));
+    } catch(err){
+      reject(err);
+    }
+  });
+}
+function supabaseSelectRows(table, orderClauses){
+  var query = '?select=*';
+  (orderClauses || []).forEach(function(orderClause){
+    query += '&order=' + encodeURIComponent(orderClause);
+  });
+  return supabaseRestRequest('GET', '/rest/v1/' + table + query, null);
+}
 function lookupAuthCodeRemote(code, onSuccess, onError){
   if(!window.XMLHttpRequest){
     if(onError) onError(new Error('XMLHttpRequest indisponible'));
@@ -521,13 +570,13 @@ function registerServiceWorker(){
   if(!('serviceWorker' in navigator)) return;
   if(location.protocol !== 'https:' && location.hostname !== 'localhost') return;
   (window.__BP_BOOT_CLEANUP__ || Promise.resolve()).then(function(){
-    return navigator.serviceWorker.register('./sw.js?v=20260531b');
+    return navigator.serviceWorker.register('./sw.js?v=20260531c');
   }).catch(function(err){
     console.error('Service worker registration failed', err);
   });
 }
 function syncPendingIfPossible(){
-  if(!AUTHENTICATED || !SUPABASE_CLIENT || navigator.onLine === false || !hasPendingSync()) return Promise.resolve(false);
+  if(!AUTHENTICATED || !hasSupabaseAccess() || navigator.onLine === false || !hasPendingSync()) return Promise.resolve(false);
   return saveDBToSupabase();
 }
 function loadFreshDBAfterSync(force){
@@ -1213,7 +1262,7 @@ function exportDBForSupabase(){
   };
 }
 function loadDBFromSupabase(force){
-  if(!SUPABASE_CLIENT) return Promise.resolve(false);
+  if(!hasSupabaseAccess()) return Promise.resolve(false);
   if(hasPendingSync()){
     if(navigator.onLine !== false){
       return saveDBToSupabase().then(function(){
@@ -1232,16 +1281,16 @@ function loadDBFromSupabase(force){
   if(SUPABASE_LOAD_PROMISE && !force) return SUPABASE_LOAD_PROMISE;
   if(force) SUPABASE_LOAD_PROMISE = null;
   SUPABASE_LOAD_PROMISE = Promise.all([
-    SUPABASE_CLIENT.from('clients').select('*').order('id'),
-    SUPABASE_CLIENT.from('prestations').select('*').order('id'),
-    SUPABASE_CLIENT.from('produits').select('*').order('id'),
-    SUPABASE_CLIENT.from('gammes').select('*').order('id'),
-    SUPABASE_CLIENT.from('gamme_items').select('*').order('gamme_id').order('produit_id'),
-    SUPABASE_CLIENT.from('rdv').select('*').order('date').order('heure'),
-    SUPABASE_CLIENT.from('rdv_prestations').select('*').order('rdv_id').order('prestation_id'),
-    SUPABASE_CLIENT.from('traitements').select('*').order('id'),
-    SUPABASE_CLIENT.from('traitement_seances').select('*').order('traitement_id').order('numero'),
-    SUPABASE_CLIENT.from('ventes').select('*').order('date').order('id')
+    supabaseSelectRows('clients', ['id.asc']),
+    supabaseSelectRows('prestations', ['id.asc']),
+    supabaseSelectRows('produits', ['id.asc']),
+    supabaseSelectRows('gammes', ['id.asc']),
+    supabaseSelectRows('gamme_items', ['gamme_id.asc','produit_id.asc']),
+    supabaseSelectRows('rdv', ['date.asc','heure.asc']),
+    supabaseSelectRows('rdv_prestations', ['rdv_id.asc','prestation_id.asc']),
+    supabaseSelectRows('traitements', ['id.asc']),
+    supabaseSelectRows('traitement_seances', ['traitement_id.asc','numero.asc']),
+    supabaseSelectRows('ventes', ['date.asc','id.asc'])
   ]).then(function(results){
     var payload = {
       clients: results[0].data || [],
@@ -1268,8 +1317,9 @@ function loadDBFromSupabase(force){
 }
 function upsertRows(table, rows){
   if(!rows || !rows.length) return Promise.resolve(true);
-  return SUPABASE_CLIENT.from(table).upsert(rows, { onConflict: 'id' }).then(function(res){
-    if(res && res.error) throw res.error;
+  return supabaseRestRequest('POST', '/rest/v1/' + table + '?on_conflict=id', rows, {
+    Prefer: 'resolution=merge-duplicates,return=minimal'
+  }).then(function(){
     return true;
   });
 }
@@ -1278,16 +1328,18 @@ function replaceChildRows(table, key, parentIds, rows){
   var promise = Promise.resolve(true);
   if(ids.length){
     promise = promise.then(function(){
-      return SUPABASE_CLIENT.from(table).delete().in(key, ids).then(function(res){
-        if(res && res.error) throw res.error;
+      return supabaseRestRequest('DELETE', '/rest/v1/' + table + '?' + encodeURIComponent(key) + '=in.(' + ids.join(',') + ')', null, {
+        Prefer: 'return=minimal'
+      }).then(function(){
         return true;
       });
     });
   }
   if(rows && rows.length){
     promise = promise.then(function(){
-      return SUPABASE_CLIENT.from(table).insert(rows).then(function(res){
-        if(res && res.error) throw res.error;
+      return supabaseRestRequest('POST', '/rest/v1/' + table, rows, {
+        Prefer: 'return=minimal'
+      }).then(function(){
         return true;
       });
     });
@@ -1303,8 +1355,9 @@ function syncDeletedRows(){
     var ids = (deletedMap[table] || []).map(function(id){ return Number(id); }).filter(function(id){ return !isNaN(id); });
     if(!ids.length) return;
     promise = promise.then(function(){
-      return SUPABASE_CLIENT.from(table).delete().in('id', ids).then(function(res){
-        if(res && res.error) throw res.error;
+      return supabaseRestRequest('DELETE', '/rest/v1/' + table + '?id=in.(' + ids.join(',') + ')', null, {
+        Prefer: 'return=minimal'
+      }).then(function(){
         clearDeletedRows(table, ids);
         return true;
       });
@@ -1314,7 +1367,7 @@ function syncDeletedRows(){
 }
 function saveDBToSupabase(){
   var snapshot = persistLocalDB();
-  if(!SUPABASE_CLIENT || SUPABASE_SAVING) return Promise.resolve(false);
+  if(!hasSupabaseAccess() || SUPABASE_SAVING) return Promise.resolve(false);
   if(navigator.onLine === false){
     markPendingSync();
     return Promise.resolve(false);
@@ -1355,7 +1408,7 @@ function saveDBToSupabase(){
 function scheduleSupabaseSave(){
   var snapshot = persistLocalDB();
   if(isDbDirty(snapshot)) markPendingSync();
-  if(!SUPABASE_CLIENT || !AUTHENTICATED){
+  if(!hasSupabaseAccess() || !AUTHENTICATED){
     updateSyncUI();
     return;
   }
@@ -1587,7 +1640,7 @@ window.addEventListener('online', function(){
   updateNetworkUI();
   updateSyncUI();
   syncPendingIfPossible();
-  if(AUTHENTICATED && SUPABASE_CLIENT && !hasPendingSync()){
+  if(AUTHENTICATED && hasSupabaseAccess() && !hasPendingSync()){
     loadFreshDBAfterSync(true).then(function(){
       if(typeof go === 'function') go(defaultPageForRole());
     });
@@ -1602,17 +1655,9 @@ updateSyncUI();
 updateInstallUI();
 registerServiceWorker();
 updateRoleUI();
-loadSupabaseSdk().then(function(client){
-  if(!client || !AUTHENTICATED) return;
-  loadFreshDBAfterSync(true).then(function(){
-    if(typeof go === 'function') go(defaultPageForRole());
-  }, function(){
-    if(typeof go === 'function') go(defaultPageForRole());
-  });
-});
 if(AUTHENTICATED){
   unlockApp();
-  if(SUPABASE_CLIENT){
+  if(hasSupabaseAccess()){
     loadFreshDBAfterSync(true).then(function(){
       go(defaultPageForRole());
     }, function(){

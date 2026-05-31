@@ -1,10 +1,9 @@
-const CACHE_NAME = 'beautiful-penda-v5';
+const CACHE_NAME = 'beautiful-penda-v6';
 const APP_SHELL = [
   './',
   './index.html',
   './manifest.webmanifest',
-  './beautiful-penda-logo.png',
-  'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2'
+  './beautiful-penda-logo.png'
 ];
 
 self.addEventListener('install', function(event){
