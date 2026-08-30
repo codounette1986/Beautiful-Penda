@@ -517,6 +517,12 @@ function updateSyncUI(){
   setStatusPill('SYNCSTATUS', text, kind);
   setStatusPill('SYNCSTATUSAPP', text, kind);
 }
+function setSyncButtonState(label, disabled){
+  var btn = document.getElementById('SYNCBTN');
+  if(!btn) return;
+  btn.textContent = label;
+  btn.disabled = !!disabled;
+}
 function updateInstallUI(){
   var btn = document.getElementById('INSTALLBTN');
   if(!btn) return;
@@ -560,16 +566,64 @@ function cleanupLegacyPwaAsync(){
     }, function(){});
   }
 }
-function schedulePendingSync(delayMs){
+function schedulePendingSync(delayMs, page){
   if(!AUTHENTICATED || !hasSupabaseAccess()) return;
   setTimeout(function(){
     if(!AUTHENTICATED || !hasSupabaseAccess()) return;
-    syncPendingIfPossible();
+    syncPendingIfPossible(page);
   }, delayMs || STARTUP_PENDING_SYNC_DELAY_MS);
 }
-function syncPendingIfPossible(){
+function syncPendingIfPossible(page){
   if(!AUTHENTICATED || !hasSupabaseAccess() || navigator.onLine === false || !hasPendingSync()) return Promise.resolve(false);
-  return saveDBToSupabase();
+  return saveDBToSupabase().then(function(result){
+    if(result === false || navigator.onLine === false) return result;
+    return loadFreshDBAfterSync(true).then(function(loadResult){
+      if(page && typeof go === 'function' && AUTHENTICATED){
+        go(page);
+      }
+      return loadResult;
+    }, function(err){
+      console.error(err);
+      return result;
+    });
+  });
+}
+function manualSync(){
+  if(!AUTHENTICATED){
+    alert('Connectez-vous d abord.');
+    return false;
+  }
+  if(!hasSupabaseAccess()){
+    alert('Synchronisation indisponible.');
+    return false;
+  }
+  if(navigator.onLine === false){
+    markPendingSync();
+    alert('Pas de connexion Internet. Les modifications restent en attente.');
+    return false;
+  }
+  setSyncButtonState('Synchronisation...', true);
+  var page = defaultPageForRole();
+  var action = hasPendingSync() ? syncPendingIfPossible(page) : loadFreshDBAfterSync(true).then(function(result){
+    if(page && typeof go === 'function' && AUTHENTICATED){
+      go(page);
+    }
+    return result;
+  });
+  Promise.resolve(action).then(function(result){
+    if(result === false){
+      alert('Echec de synchronisation. Reessayez.');
+      return;
+    }
+    updateSyncUI();
+    alert('Synchronisation terminee.');
+  }, function(err){
+    console.error(err);
+    alert('Echec de synchronisation. Reessayez.');
+  }).then(function(){
+    setSyncButtonState('Synchroniser maintenant', false);
+  });
+  return false;
 }
 function loadFreshDBAfterSync(force){
   SUPABASE_LOAD_PROMISE = null;
@@ -825,13 +879,13 @@ document.addEventListener('DOMContentLoaded', function(){
       <div class="nav-item" data-page="gammes">&#127873; Gammes</div>
       <div class="nav-section">Finances</div>
       <div class="nav-item" data-page="ventes">&#128722; Ventes</div>
-      <div class="nav-item" data-page="depenses">&#128179; Depenses</div>
+      <div class="nav-item" data-page="depenses">&#128179; D&eacute;penses</div>
       <div class="nav-item" id="NAV-FINANCES" data-page="finances">&#128176; Finances</div>
     </nav>
     <div class="sdate" id="SDATE"></div>
   </div>
   <div class="main">
-    <div class="topbar"><div class="topbar-main"><div><h2 id="PTITLE">Tableau de bord</h2><div class="topbar-meta"><span class="status-pill" id="NETSTATUSAPP">Connexion inconnue</span><span class="status-pill" id="SYNCSTATUSAPP">Synchronisation inactive</span></div></div><div style="display:flex;gap:12px;align-items:center"><button class="btn" id="LOGOUTBTN" onclick="authLogout()">Se d&eacute;connecter</button><div style="display:flex;gap:7px" id="PACTS"></div></div></div></div>
+    <div class="topbar"><div class="topbar-main"><div><h2 id="PTITLE">Tableau de bord</h2><div class="topbar-meta"><span class="status-pill" id="NETSTATUSAPP">Connexion inconnue</span><span class="status-pill" id="SYNCSTATUSAPP">Synchronisation inactive</span></div></div><div style="display:flex;gap:12px;align-items:center"><button class="btn" id="SYNCBTN" onclick="manualSync()">Synchroniser maintenant</button><button class="btn" id="LOGOUTBTN" onclick="authLogout()">Se d&eacute;connecter</button><div style="display:flex;gap:7px" id="PACTS"></div></div></div></div>
     <div class="content" id="PCONTENT"></div>
   </div>
   <div id="MC"></div>
@@ -1273,7 +1327,7 @@ function loadDBFromSupabase(force){
     restoreLocalDB();
     updateSyncUI();
     if(navigator.onLine !== false){
-      schedulePendingSync(STARTUP_PENDING_SYNC_DELAY_MS);
+      schedulePendingSync(STARTUP_PENDING_SYNC_DELAY_MS, AUTHENTICATED ? defaultPageForRole() : '');
     }
     return Promise.resolve('local-pending');
   }
@@ -1449,7 +1503,7 @@ function unlockApp(){
   if($('AUTHERR')) $('AUTHERR').style.display='none';
   updateNetworkUI();
   updateSyncUI();
-  schedulePendingSync(STARTUP_PENDING_SYNC_DELAY_MS);
+  schedulePendingSync(STARTUP_PENDING_SYNC_DELAY_MS, defaultPageForRole());
 }
 function lockApp(){
   AUTHENTICATED = false;
@@ -1498,11 +1552,11 @@ function clientHistorique(cId){ var rdvs=DB.rdv.filter(function(r){ return r.cId
 var pages={
 dash:function(el){ var ventesJour = ventesForToday(); var ventesMois = salesForCurrentMonth(); var tj = ventesJour.reduce(function(s,v){ return s + v.montant; },0); var tm = ventesMois.reduce(function(s,v){ return s + v.montant; },0); var sol = totalARecouvrer(); var sb = DB.produits.filter(function(p){ return p.stock <= p.seuil; }).length; var rdvAuj = rdvForToday(); var rdvRows = rdvAuj.map(function(r){ var c = gc(r.cId); return '<tr><td>'+fmtHeure24(r.heure)+'</td><td>'+(c?esc(c.nom):'?')+'</td><td><span class="badge '+(SC[r.statut]||'bg')+'">'+esc(r.statut)+'</span></td></tr>'; }).join(''); var traitActifs = DB.traitements.filter(function(t){ return t.statut === 'en cours'; }); var traitRows = traitActifs.map(function(t){ var done = t.seances.filter(function(s){ return s.statut === 'termine'; }).length; var paye = traitementPayeTotal(t); var c = gc(t.cId); return '<div style="margin-bottom:11px"><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px"><div class="fr">'+avHtml(c,false)+'<span>'+(c?esc(c.nom):'?')+'</span></div><span style="color:#999">'+done+'/4</span></div><div class="pbar"><div class="pfill" style="width:'+(done*25)+'%"></div></div><div style="font-size:11px;color:#999;margin-top:2px">Solde : '+fmt(traitementSolde(t))+'</div></div>'; }).join(''); el.innerHTML='<div class="g4"><div class="metric"><div class="ml">Recettes du jour</div><div class="mv" style="color:#185FA5">'+fmt(tj)+'</div></div><div class="metric"><div class="ml">Recettes du mois</div><div class="mv">'+fmt(tm)+'</div></div><div class="metric"><div class="ml">RDV du jour</div><div class="mv">'+rdvAuj.length+'</div></div><div class="metric"><div class="ml">Soldes &agrave; recouvrer</div><div class="mv" style="color:#b91c1c">'+fmt(sol)+'</div></div></div>'+(sb>0?'<div class="aw">Stock faible : '+sb+' produit(s) sous le seuil</div>':'')+'<div class="g2"><div class="card"><div class="ct">Rendez-vous du jour ('+rdvAuj.length+')</div><table><tr><th>Heure</th><th>Cliente</th><th>Statut</th></tr>'+rdvRows+'</table></div><div class="card"><div class="ct">Traitements en cours ('+traitActifs.length+')</div>'+traitRows+'</div></div>'; },
 clients:function(el,acts){ acts.innerHTML='<button class="btn btn-primary" onclick="mClient()">+ Nouvelle cliente</button>'; el.innerHTML='<div style="margin-bottom:12px"><input id="SRCC" placeholder="Rechercher nom ou telephone..." oninput="filterC(this.value)" style="max-width:300px"></div><div class="card"><table id="CTBL"><tr><th></th><th>Nom</th><th>Telephone</th><th>RDV</th><th>Depense totale</th><th>Actions</th></tr>'+DB.clients.map(cRow).join('')+'</table></div>'; },
-rdv:function(el,acts){ acts.innerHTML='<button class="btn btn-primary" onclick="mRdv()">+ Nouveau RDV</button>'; el.innerHTML='<div style="margin-bottom:12px"><input id="SRCRDV" placeholder="Rechercher cliente, prestation, date..." value="'+esc(SEARCH.rdv)+'" oninput="setRdvSearch(this.value)" style="max-width:320px"></div><div class="tab-bar"><div class="tab active" onclick="switchRdvTab(this,\'actifs\')">A venir / En cours</div><div class="tab" onclick="switchRdvTab(this,\'termines\')">Termines</div></div><div id="RDV-CONTENT"></div>'; renderRdvTab('actifs'); },
+rdv:function(el,acts){ acts.innerHTML='<button class="btn btn-primary" onclick="mRdv()">+ Nouveau rendez-vous</button>'; el.innerHTML='<div style="margin-bottom:12px"><input id="SRCRDV" placeholder="Rechercher cliente, prestation, date..." value="'+esc(SEARCH.rdv)+'" oninput="setRdvSearch(this.value)" style="max-width:320px"></div><div class="tab-bar"><div class="tab active" onclick="switchRdvTab(this,\'actifs\')">A venir / En cours</div><div class="tab" onclick="switchRdvTab(this,\'termines\')">Termines</div></div><div id="RDV-CONTENT"></div>'; renderRdvTab('actifs'); },
 traitements:function(el,acts){ acts.innerHTML='<button class="btn btn-primary" onclick="mTraitement()">&#129710; Nouveau traitement</button>'; el.innerHTML='<div style="margin-bottom:12px"><input id="SRCT" placeholder="Rechercher cliente ou telephone..." oninput="renderTraitements(this.value)" style="max-width:320px"></div><div id="TRAIT-CONTENT"></div>'; renderTraitements(''); },
 prestations:function(el,acts){ acts.innerHTML='<button class="btn btn-primary" onclick="mPrestation()">+ Nouvelle prestation</button>'; el.innerHTML='<div style="margin-bottom:12px"><input id="SRCPREST" placeholder="Rechercher prestation ou categorie..." value="'+esc(SEARCH.prestations)+'" oninput="setPrestationsSearch(this.value)" style="max-width:320px"></div><div class="tab-bar"><div class="tab active" onclick="switchPrestTab(this,\'actives\')">Actives</div><div class="tab" onclick="switchPrestTab(this,\'historique\')">Historique (prestations deja effectuees)</div></div><div id="PREST-CONTENT"></div>'; renderPrestTab('actives'); },
-produits:function(el,acts){ acts.innerHTML='<button class="btn btn-primary" onclick="mProduit()">+ Nouveau produit</button>'; var q=qnorm(SEARCH.produits); var produits=DB.produits.filter(function(p){ return !q || qnorm(p.nom).indexOf(q)>=0 || qnorm(p.cat).indexOf(q)>=0; }); var sb=DB.produits.filter(function(p){return p.stock<=p.seuil;}).length; var valStock=DB.produits.reduce(function(s,p){return s+p.stock*p.pv;},0); el.innerHTML='<div style="margin-bottom:12px"><input id="SRCPROD" placeholder="Rechercher produit ou categorie..." value="'+esc(SEARCH.produits)+'" oninput="setProduitsSearch(this.value)" style="max-width:320px"></div><div class="g3"><div class="metric"><div class="ml">Total produits</div><div class="mv">'+DB.produits.length+'</div></div><div class="metric"><div class="ml">Stock faible</div><div class="mv" style="color:#b91c1c">'+sb+'</div></div><div class="metric"><div class="ml">Valeur stock</div><div class="mv">'+fmt(valStock)+'</div></div></div>'+(sb>0?'<div class="aw">'+sb+' produit(s) sous le seuil d\'alerte</div>':'')+'<div class="card"><table><tr><th>Produit</th><th>Categorie</th><th>Prix vente</th><th>Cout</th><th>Stock</th><th>Seuil</th><th>Etat</th><th>Actions</th></tr>'+(produits.length?produits.map(prodRow).join(''):'<tr><td colspan=\"8\" class=\"empty\">Aucun produit trouve.</td></tr>')+'</table></div>'; },
-gammes:function(el,acts){ acts.innerHTML='<button class="btn btn-primary" onclick="mGamme()">+ Nouvelle gamme</button>'; if(!DB.gammes.length){ el.innerHTML='<div class="card"><div class="empty">Aucune gamme.</div></div>'; return; } var q=qnorm(SEARCH.gammes); var gammes=DB.gammes.filter(function(g){ return !q || qnorm(g.nom).indexOf(q)>=0 || qnorm(g.desc).indexOf(q)>=0 || (g.items||[]).some(function(it){ var p=gprod(it.pId); return p && qnorm(p.nom).indexOf(q)>=0; }); }); el.innerHTML='<div style="margin-bottom:12px"><input id="SRCGAM" placeholder="Rechercher gamme, description, produit..." value="'+esc(SEARCH.gammes)+'" oninput="setGammesSearch(this.value)" style="max-width:340px"></div>'+(gammes.length?gammes.map(function(g){ var stockOk=g.items.every(function(it){var p=gprod(it.pId);return p&&p.stock>=it.qte;}); var coutTotal=g.items.reduce(function(s,it){var p=gprod(it.pId);return s+(p?p.ca*it.qte:0);},0); var itemRows=g.items.map(function(it){ var p=gprod(it.pId), ok=p&&p.stock>=it.qte; return '<tr><td>'+(p?esc(p.nom):'?')+'</td><td>'+it.qte+'</td><td>'+(p?p.stock:'-')+'</td><td><span class="badge '+(ok?'bs':'bd')+'">'+(ok?'OK':'Insuffisant')+'</span></td></tr>'; }).join(''); return '<div class="card"><div class="ct"><div><div style="font-size:14px;font-weight:600">&#127873; '+esc(g.nom)+'</div>'+(g.desc?'<div style="font-size:12px;color:#888;font-weight:400;margin-top:2px">'+esc(g.desc)+'</div>':'')+'</div><div class="fg"><span class="badge '+(stockOk?'bs':'bd')+'">'+(stockOk?'Disponible':'Stock insuffisant')+'</span><button class="btn btn-sm btn-edit" onclick="mGamme('+g.id+')">Modifier</button><button class="btn btn-sm btn-del" onclick="delGamme('+g.id+')">Suppr.</button></div></div><div style="display:flex;gap:18px;font-size:13px;margin-bottom:12px"><span>Prix pack: <strong style="color:#185FA5">'+fmt(g.prix)+'</strong></span><span>Cout: <strong style="color:#888">'+fmt(coutTotal)+'</strong></span><span>Marge: <strong style="color:#16a34a">'+fmt(g.prix-coutTotal)+'</strong></span></div><table><tr><th>Produit</th><th>Qte</th><th>Stock</th><th>Etat</th></tr>'+itemRows+'</table><div style="margin-top:12px">'+(stockOk?'<button class="btn btn-primary" onclick="vendreGamme('+g.id+')">&#128722; Vendre ce pack</button>':'<div class="ae" style="margin:0">Stock insuffisant - vente impossible</div>')+'</div></div>'; }).join(''):'<div class="card"><div class="empty">Aucune gamme trouvee.</div></div>'); },
+produits:function(el,acts){ acts.innerHTML='<button class="btn btn-primary" onclick="mProduit()">+ Nouveau produit</button>'; var q=qnorm(SEARCH.produits); var produits=DB.produits.filter(function(p){ return !q || qnorm(p.nom).indexOf(q)>=0 || qnorm(p.cat).indexOf(q)>=0; }); var sb=DB.produits.filter(function(p){return p.stock<=p.seuil;}).length; var valStock=DB.produits.reduce(function(s,p){return s+p.stock*p.pv;},0); el.innerHTML='<div style="margin-bottom:12px"><input id="SRCPROD" placeholder="Rechercher produit ou categorie..." value="'+esc(SEARCH.produits)+'" oninput="setProduitsSearch(this.value)" style="max-width:320px"></div><div class="g3"><div class="metric"><div class="ml">Total produits</div><div class="mv">'+DB.produits.length+'</div></div><div class="metric"><div class="ml">Stock faible</div><div class="mv" style="color:#b91c1c">'+sb+'</div></div><div class="metric"><div class="ml">Valeur du stock</div><div class="mv">'+fmt(valStock)+'</div></div></div>'+(sb>0?'<div class="aw">'+sb+' produit(s) sous le seuil d\'alerte</div>':'')+'<div class="card"><table><tr><th>Produit</th><th>Categorie</th><th>Prix de vente</th><th>Cout</th><th>Stock</th><th>Seuil</th><th>Etat</th><th>Actions</th></tr>'+(produits.length?produits.map(prodRow).join(''):'<tr><td colspan=\"8\" class=\"empty\">Aucun produit trouve.</td></tr>')+'</table></div>'; },
+gammes:function(el,acts){ acts.innerHTML='<button class="btn btn-primary" onclick="mGamme()">+ Nouvelle gamme</button>'; if(!DB.gammes.length){ el.innerHTML='<div class="card"><div class="empty">Aucune gamme.</div></div>'; return; } var q=qnorm(SEARCH.gammes); var gammes=DB.gammes.filter(function(g){ return !q || qnorm(g.nom).indexOf(q)>=0 || qnorm(g.desc).indexOf(q)>=0 || (g.items||[]).some(function(it){ var p=gprod(it.pId); return p && qnorm(p.nom).indexOf(q)>=0; }); }); el.innerHTML='<div style="margin-bottom:12px"><input id="SRCGAM" placeholder="Rechercher gamme, description, produit..." value="'+esc(SEARCH.gammes)+'" oninput="setGammesSearch(this.value)" style="max-width:340px"></div>'+(gammes.length?gammes.map(function(g){ var stockOk=g.items.every(function(it){var p=gprod(it.pId);return p&&p.stock>=it.qte;}); var coutTotal=g.items.reduce(function(s,it){var p=gprod(it.pId);return s+(p?p.ca*it.qte:0);},0); var itemRows=g.items.map(function(it){ var p=gprod(it.pId), ok=p&&p.stock>=it.qte; return '<tr><td>'+(p?esc(p.nom):'?')+'</td><td>'+it.qte+'</td><td>'+(p?p.stock:'-')+'</td><td><span class="badge '+(ok?'bs':'bd')+'">'+(ok?'OK':'Insuffisant')+'</span></td></tr>'; }).join(''); return '<div class="card"><div class="ct"><div><div style="font-size:14px;font-weight:600">&#127873; '+esc(g.nom)+'</div>'+(g.desc?'<div style="font-size:12px;color:#888;font-weight:400;margin-top:2px">'+esc(g.desc)+'</div>':'')+'</div><div class="fg"><span class="badge '+(stockOk?'bs':'bd')+'">'+(stockOk?'Disponible':'Stock insuffisant')+'</span><button class="btn btn-sm btn-edit" onclick="mGamme('+g.id+')">Modifier</button><button class="btn btn-sm btn-del" onclick="delGamme('+g.id+')">Suppr.</button></div></div><div style="display:flex;gap:18px;font-size:13px;margin-bottom:12px"><span>Prix du pack : <strong style="color:#185FA5">'+fmt(g.prix)+'</strong></span><span>Cout : <strong style="color:#888">'+fmt(coutTotal)+'</strong></span><span>Marge : <strong style="color:#16a34a">'+fmt(g.prix-coutTotal)+'</strong></span></div><table><tr><th>Produit</th><th>Qte</th><th>Stock</th><th>Etat</th></tr>'+itemRows+'</table><div style="margin-top:12px">'+(stockOk?'<button class="btn btn-primary" onclick="vendreGamme('+g.id+')">&#128722; Vendre ce pack</button>':'<div class="ae" style="margin:0">Stock insuffisant - vente impossible</div>')+'</div></div>'; }).join(''):'<div class="card"><div class="empty">Aucune gamme trouvee.</div></div>'); },
 ventes:function(el,acts){
   acts.innerHTML='<button class="btn btn-primary" onclick="mVente()">+ Vente rapide</button>';
   var q=qnorm(SEARCH.ventes);
@@ -1544,7 +1598,7 @@ depenses:function(el,acts){
   }).map(function(v){
     return '<tr><td>'+fmtDate(v.date)+'</td><td>'+esc(v.desc)+'</td><td><span class="badge bd">depense</span></td><td style="font-weight:600;color:#b91c1c">'+fmt(v.montant)+'</td><td><span class="badge bg">'+esc(v.mode || '-')+'</span></td><td><div class="fg"><button class="btn btn-sm btn-edit" onclick="mDepense('+v.id+')">Modifier</button><button class="btn btn-sm btn-del" onclick="delDepense('+v.id+')">Suppr.</button></div></td></tr>';
   }).join('');
-  el.innerHTML='<div style="margin-bottom:12px"><input id="SRCDEP" placeholder="Rechercher description, mode, date..." value="'+esc(SEARCH.depenses)+'" oninput="setDepensesSearch(this.value)" style="max-width:340px"></div><div class="g3"><div class="metric"><div class="ml">Depenses totales</div><div class="mv" style="color:#b91c1c">'+fmt(total)+'</div></div><div class="metric"><div class="ml">Depenses du mois</div><div class="mv" style="color:#b91c1c">'+fmt(totalMois)+'</div></div><div class="metric"><div class="ml">Nombre de lignes</div><div class="mv">'+depenses.length+'</div></div></div><div class="card"><table><tr><th>Date</th><th>Description</th><th>Type</th><th>Montant</th><th>Mode</th><th>Actions</th></tr>'+(rows || '<tr><td colspan=\"6\" class=\"empty\">Aucune depense enregistree.</td></tr>')+'</table></div>';
+  el.innerHTML='<div style="margin-bottom:12px"><input id="SRCDEP" placeholder="Rechercher description, mode, date..." value="'+esc(SEARCH.depenses)+'" oninput="setDepensesSearch(this.value)" style="max-width:340px"></div><div class="g3"><div class="metric"><div class="ml">Depenses totales</div><div class="mv" style="color:#b91c1c">'+fmt(total)+'</div></div><div class="metric"><div class="ml">Depenses du mois</div><div class="mv" style="color:#b91c1c">'+fmt(totalMois)+'</div></div><div class="metric"><div class="ml">Nombre de depenses</div><div class="mv">'+depenses.length+'</div></div></div><div class="card"><table><tr><th>Date</th><th>Description</th><th>Type</th><th>Montant</th><th>Mode</th><th>Actions</th></tr>'+(rows || '<tr><td colspan=\"6\" class=\"empty\">Aucune depense enregistree.</td></tr>')+'</table></div>';
 },
 finances:function(el){
   var ventesMois = salesForCurrentMonth();
@@ -1638,7 +1692,7 @@ window.addEventListener('appinstalled', function(){
 window.addEventListener('online', function(){
   updateNetworkUI();
   updateSyncUI();
-  schedulePendingSync(STARTUP_PENDING_SYNC_DELAY_MS);
+  schedulePendingSync(STARTUP_PENDING_SYNC_DELAY_MS, defaultPageForRole());
   if(AUTHENTICATED && hasSupabaseAccess()){
     scheduleBackgroundRefresh(true, defaultPageForRole(), STARTUP_REMOTE_REFRESH_DELAY_MS);
   }
@@ -1646,6 +1700,16 @@ window.addEventListener('online', function(){
 window.addEventListener('offline', function(){
   updateNetworkUI();
   updateSyncUI();
+});
+window.addEventListener('focus', function(){
+  if(AUTHENTICATED && hasSupabaseAccess()){
+    scheduleBackgroundRefresh(true, defaultPageForRole(), 600);
+  }
+});
+document.addEventListener('visibilitychange', function(){
+  if(document.visibilityState === 'visible' && AUTHENTICATED && hasSupabaseAccess()){
+    scheduleBackgroundRefresh(true, defaultPageForRole(), 600);
+  }
 });
 updateNetworkUI();
 updateSyncUI();
